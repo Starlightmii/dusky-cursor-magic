@@ -8,5 +8,5 @@
   "glass": {"color": [0.71, 0.77, 1.0], "radius_px": 130, "alpha": 0.22},
   "blur_layerrule": true,
   "pack_dir": "~/.config/dusky/cursor-magic/packs",
-  "emotion": "random"
+  "emotion": "girl"
 }

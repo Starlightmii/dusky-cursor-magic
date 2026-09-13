@@ -9,9 +9,17 @@ class SpeedEstimator:
     def __init__(self, window_s=0.05):
         self.window_s = window_s
         self._s = []  # (t, px)
+        self._last = None
 
     def add(self, dx, dy, t=None):
         self._s.append((t if t is not None else time.monotonic(), abs(dx) + abs(dy)))
+
+    def feed(self, t, x, y):
+        """Absolute pointer pos -> windowed px/s."""
+        if self._last:
+            self.add(x - self._last[1], y - self._last[2], t)
+        self._last = (t, x, y)
+        return self.speed(t)
 
     def speed(self, t=None):
         t = t if t is not None else time.monotonic()
@@ -38,10 +46,15 @@ def ease_out_cubic(p):
 
 
 class BurstMachine:
-    """idle -> burst (threshold) -> shrink -> idle. One burst at a time."""
-    def __init__(self, threshold=3000.0, hold_s=0.9, shrink_s=0.35, cooldown_s=1.2):
+    """idle -> burst (threshold) -> shrink -> idle. One burst at a time.
+    Publishes envelope (0..1 shape), scale (px multiplier incl. peak_scale),
+    wobble (radians-ish phase for spring rotation)."""
+    def __init__(self, threshold=3000.0, hold_s=0.9, shrink_s=0.35, cooldown_s=1.2,
+                 peak_scale=3.4):
         self.thr, self.hold, self.shrink, self.cool = threshold, hold_s, shrink_s, cooldown_s
+        self.peak = peak_scale
         self.state, self.start, self.last_end = "idle", 0.0, -9e9
+        self.envelope, self.scale, self.wobble = 0.0, 1.0, 0.0
 
     def update(self, t, speed):
         """-> (state, progress 0..1)."""
@@ -50,17 +63,34 @@ class BurstMachine:
             if p >= 1.0:
                 self.state, self.start, self.last_end = "shrink", t, t
                 return "shrink", 0.0
+            self._shape(p, t)
             return "burst", p
         if self.state == "shrink":
             p = (t - self.start) / self.shrink
             if p >= 1.0:
                 self.state = "idle"
+                self.envelope = self.wobble = 0.0; self.scale = 1.0
                 return "idle", 1.0
+            self.envelope = 1.0 - ease_out_cubic(p)
+            self.scale = 1.0 + (self.peak - 1.0) * self.envelope
+            self.wobble = (t - self.start) * 30.0
             return "shrink", p
         if speed >= self.thr and t - self.last_end >= self.cool:
             self.state, self.start = "burst", t
+            self._shape(0.0, t)
             return "burst", 0.0
         return "idle", 0.0
+
+    def _shape(self, p, t):
+        e = elastic_burst(p)
+        self.envelope = e
+        self.scale = 1.0 + (self.peak - 1.0) * e
+        self.wobble = (t - self.start) * 30.0 if p < 1.0 else 0.0
+
+    def trigger(self, t, *ignored):
+        """Force-arm a burst now (demo mode)."""
+        self.state, self.start = "burst", t
+        self._shape(0.0, t)
 
 
 # ---- packs ------------------------------------------------------------------
@@ -99,3 +129,19 @@ def decode_frames(path):
     except EOFError:
         pass
     return frames, durs
+
+
+def load_config(path=None):
+    """config.default.json merged with an optional user override file."""
+    base = os.path.join(os.path.dirname(os.path.abspath(__file__)), "config.default.json")
+    with open(base) as f:
+        cfg = json.load(f)
+    if path and os.path.isfile(path):
+        with open(path) as f:
+            user = json.load(f)
+        for k, v in user.items():
+            if isinstance(v, dict) and isinstance(cfg.get(k), dict):
+                cfg[k].update(v)
+            else:
+                cfg[k] = v
+    return cfg

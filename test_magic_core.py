@@ -1,6 +1,5 @@
 """Zero-dep asserts: /usr/bin/python3 test_magic_core.py  (or pytest)."""
-import math
-from magic_core import SpeedEstimator, BurstMachine, elastic_burst
+from magic_core import SpeedEstimator, BurstMachine
 
 def test_wiggle_needs_reversals():
     from magic_core import WiggleDetector
@@ -52,12 +51,6 @@ def test_scale_continuous_across_phases():
             worst = max(worst, abs(m.scale - prev))
         prev = m.scale
     assert worst < 0.05          # no 3am "pop" between phases
-
-def test_spring_curve():
-    assert math.isclose(elastic_burst(0.0), 0.0, abs_tol=1e-9)
-    assert math.isclose(elastic_burst(1.0), 1.0, abs_tol=1e-9)
-    mid = [elastic_burst(i / 50) for i in range(50)]  # below 1.0 only
-    assert max(mid) > 1.05                           # must overshoot (macOS feel)
 
 def test_pack_loading():
     import os

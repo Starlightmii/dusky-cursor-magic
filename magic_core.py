@@ -30,17 +30,6 @@ class SpeedEstimator:
         return sum(p for _, p in self._s) / span
 
 
-def elastic_burst(p):
-    """0->1 progress -> scale factor with true >1 overshoot (easeOutElastic).
-    Peak ~1.35 near p=0.15: fast pop-in, wobbly settle (macOS feel)."""
-    if p <= 0.0:
-        return 0.0
-    if p >= 1.0:
-        return 1.0
-    c4 = (2 * math.pi) / 3
-    return 2 ** (-10 * p) * math.sin((p * 10 - 0.75) * c4) + 1
-
-
 def ease_out_cubic(p):
     return 1 - (1 - p) ** 3
 

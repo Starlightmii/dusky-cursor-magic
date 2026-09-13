@@ -62,7 +62,7 @@ def test_spring_curve():
 def test_pack_loading():
     import os
     from magic_core import load_packs, decode_frames, load_config
-    assert load_config()["threshold"] > 0
+    assert load_config()["wiggle"]["need"] == 2
     assert load_config.__doc__
     packs = load_packs(os.path.join(os.path.dirname(__file__), "packs"))
     assert set(packs) == {"anime"}

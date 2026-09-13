@@ -45,6 +45,34 @@ def ease_out_cubic(p):
     return 1 - (1 - p) ** 3
 
 
+class WiggleDetector:
+    """macOS 'find my cursor': N velocity reversals with real speed inside
+    window_s. One straight swipe = 0 reversals, so it never fires."""
+    def __init__(self, window_s=0.35, min_speed=900.0, need=2):
+        self.window_s, self.min_speed, self.need = window_s, min_speed, need
+        self._v, self._rev, self._last = [], [], None
+
+    def feed(self, t, x, y):
+        fired = False
+        if self._last:
+            dt = max(t - self._last[0], 1e-4)
+            vx, vy = (x - self._last[1]) / dt, (y - self._last[2]) / dt
+            if self._v:
+                pvx, pvy = self._v[-1][1], self._v[-1][2]
+                if (math.hypot(vx, vy) >= self.min_speed
+                        and math.hypot(pvx, pvy) >= self.min_speed
+                        and vx * pvx + vy * pvy < 0):
+                    self._rev.append(t)
+            self._v.append((t, vx, vy))
+            self._v = [s for s in self._v if t - s[0] <= self.window_s]
+            self._rev = [r for r in self._rev if t - r <= self.window_s]
+            if len(self._rev) >= self.need:
+                fired = True
+                self._rev.clear()
+        self._last = (t, x, y)
+        return fired
+
+
 class BurstMachine:
     """idle -> burst (threshold) -> shrink -> idle. One burst at a time.
     Publishes envelope (0..1 shape), scale (px multiplier incl. peak_scale),

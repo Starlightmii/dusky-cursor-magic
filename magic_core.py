@@ -74,51 +74,48 @@ class WiggleDetector:
 
 
 class BurstMachine:
-    """idle -> burst (threshold) -> shrink -> idle. One burst at a time.
-    Publishes envelope (0..1 shape), scale (px multiplier incl. peak_scale),
-    wobble (radians-ish phase for spring rotation)."""
-    def __init__(self, threshold=3000.0, hold_s=0.9, shrink_s=0.35, cooldown_s=1.2,
-                 peak_scale=3.4):
-        self.thr, self.hold, self.shrink, self.cool = threshold, hold_s, shrink_s, cooldown_s
-        self.peak = peak_scale
-        self.state, self.start, self.last_end = "idle", 0.0, -9e9
-        self.envelope, self.scale, self.wobble = 0.0, 1.0, 0.0
+    """enter -> hold -> exit -> idle. All motion uses absolute age so phases
+    never snap. Publishes alpha/scale/rot for the painter."""
+    def __init__(self, hold_s=1.4, enter_s=0.28, exit_s=0.32, cooldown_s=0.8):
+        self.hold, self.enter, self.exit, self.cool = hold_s, enter_s, exit_s, cooldown_s
+        self.state, self.t0, self.last_end = "idle", 0.0, -9e9
+        self.alpha, self.scale, self.rot, self.age = 0.0, 0.82, 0.0, 0.0
 
-    def update(self, t, speed):
-        """-> (state, progress 0..1)."""
-        if self.state == "burst":
-            p = (t - self.start) / self.hold
-            if p >= 1.0:
-                self.state, self.start, self.last_end = "shrink", t, t
-                return "shrink", 0.0
-            self._shape(p, t)
-            return "burst", p
-        if self.state == "shrink":
-            p = (t - self.start) / self.shrink
-            if p >= 1.0:
-                self.state = "idle"
-                self.envelope = self.wobble = 0.0; self.scale = 1.0
-                return "idle", 1.0
-            self.envelope = 1.0 - ease_out_cubic(p)
-            self.scale = 1.0 + (self.peak - 1.0) * self.envelope
-            self.wobble = (t - self.start) * 30.0
-            return "shrink", p
-        if speed >= self.thr and t - self.last_end >= self.cool:
-            self.state, self.start = "burst", t
-            self._shape(0.0, t)
-            return "burst", 0.0
-        return "idle", 0.0
+    def trigger(self, t):
+        if self.state != "idle" or t - self.last_end < self.cool:
+            return False
+        self.state, self.t0, self.age = "enter", t, 0.0
+        return True
 
-    def _shape(self, p, t):
-        e = elastic_burst(p)
-        self.envelope = e
-        self.scale = 1.0 + (self.peak - 1.0) * e
-        self.wobble = (t - self.start) * 30.0 if p < 1.0 else 0.0
-
-    def trigger(self, t, *ignored):
-        """Force-arm a burst now (demo mode)."""
-        self.state, self.start = "burst", t
-        self._shape(0.0, t)
+    def update(self, t, speed=0.0):
+        if self.state == "idle":
+            self.alpha, self.scale, self.rot = 0.0, 0.82, 0.0
+            return "idle", 0.0
+        self.age = t - self.t0
+        a = self.age
+        if a < self.enter:
+            p = a / self.enter
+            self.state = "enter"
+            self.alpha = ease_out_cubic(p)
+            self.scale = 0.82 + 0.18 * ease_out_cubic(p)
+        elif a < self.enter + self.hold:
+            self.state = "hold"
+            self.alpha = 1.0
+            h = a - self.enter
+            self.scale = 1.0 + 0.02 * math.sin(2 * math.pi * 0.5 * h)     # breathe
+            self.rot = math.radians(1.2) * math.sin(2 * math.pi * 0.33 * h)  # sway
+        elif a < self.enter + self.hold + self.exit:
+            p = (a - self.enter - self.hold) / self.exit
+            self.state = "exit"
+            self.alpha = 1.0 - ease_out_cubic(p)
+            # 0.18 (not plan's 0.08): exit must land on the 0.82 idle baseline
+            # or scale pops 0.92->0.82 at exit->idle — test_scale_continuous.
+            self.scale = 1.0 - 0.18 * ease_out_cubic(p)
+        else:
+            self.state, self.last_end = "idle", t
+            self.alpha, self.rot = 0.0, 0.0
+            self.scale = 0.82
+        return self.state, max(0.0, min(1.0, a / (self.enter + self.hold + self.exit)))
 
 
 # ---- packs ------------------------------------------------------------------

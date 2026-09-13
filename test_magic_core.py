@@ -24,16 +24,34 @@ def test_speed_measures_window():
     assert e.speed(t0 + 0.5) == 0.0                # aged out
 
 def test_burst_lifecycle():
-    m = BurstMachine(threshold=100, cooldown_s=0.2, hold_s=1.0, shrink_s=0.5)
-    assert m.update(0.0, 500)[0] == "burst"        # crosses threshold -> arm
-    st, p = m.update(0.5, 10); assert st == "burst" and abs(p - 0.5) < 0.06
-    st, p = m.update(1.2, 10); assert st == "shrink"
-    st, p = m.update(2.0, 10); assert st == "idle"
-    assert m.update(2.1, 500)[0] == "burst"        # re-fires after cooldown
+    m = BurstMachine(hold_s=1.0, enter_s=0.25, exit_s=0.3, cooldown_s=0.2)
+    m.trigger(0.0)
+    assert m.update(0.0)[0] == "enter"
+    assert m.update(0.10)[0] == "enter" and 0.0 < m.alpha < 1.0 and 0.8 <= m.scale <= 1.05
+    assert m.update(0.30)[0] == "hold"  and m.alpha > 0.99 and abs(m.scale - 1.0) < 0.05
+    assert m.update(1.40)[0] == "exit"
+    assert m.update(1.75)[0] == "idle"  and m.alpha == 0.0
 
 def test_no_refire_during_burst():
-    m = BurstMachine(threshold=100, cooldown_s=0.2)
-    m.update(0.0, 500); assert m.update(0.3, 500)[0] == "burst"  # still holding
+    m = BurstMachine(hold_s=1.0, enter_s=0.25, exit_s=0.3, cooldown_s=0.2)
+    m.trigger(0.0); m.trigger(0.1)                 # 2nd ignored while active
+    assert m.update(0.15)[0] == "enter"            # still first burst
+    # burst ends at 0.25+1.0+0.3 = 1.55, cooldown 0.2 -> no re-arm before 1.75
+    assert m.update(1.6)[0] == "idle"              # advance past end
+    assert m.trigger(1.6) is False                 # inside cooldown
+    assert m.trigger(2.1) is True                  # cooldown passed
+    assert m.update(2.15)[0] == "enter"
+
+def test_scale_continuous_across_phases():
+    m = BurstMachine(hold_s=1.0, enter_s=0.25, exit_s=0.3, cooldown_s=0.2)
+    m.trigger(0.0)
+    prev = None; worst = 0.0
+    for i in range(220):
+        m.update(i * 0.01)
+        if prev is not None:
+            worst = max(worst, abs(m.scale - prev))
+        prev = m.scale
+    assert worst < 0.05          # no 3am "pop" between phases
 
 def test_spring_curve():
     assert math.isclose(elastic_burst(0.0), 0.0, abs_tol=1e-9)

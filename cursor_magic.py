@@ -138,10 +138,13 @@ class Daemon:
                         breathe_sine=mo.get("breathe_sine", 1.0))
                     if self.machine.trigger(now):
                         self.position(pos); self.win.show_all()
+                        self._fresh = True   # re-anchor enter at first real paint
                         # map handler re-applies empty input shape
                     else:
                         self.machine = None
         else:
+            if getattr(self, "_fresh", False):   # map latency ate early enter frames
+                self.machine.t0 = now; self._fresh = False
             self.machine.update(now)
             self.pack_time += dt                      # real dt — fixes GIF stutter
             if self.machine.state == "idle":

@@ -111,7 +111,7 @@ class BurstMachine:
             u = a / e_len
             s = 0.5 - 0.5 * math.cos(u * math.pi)   # smooth in AND out, no initial pop
             self.scale = self._start + (self._peak - self._start) * s
-            self.alpha = min(1.0, u * 1.6)  # fade-in trails the growth start
+            self.alpha = 0.35 + 0.65 * s            # visible from frame one, trails size
         elif a < h_end:                     # hold at peak, gentle breathe
             self.state = "hold"
             h = a - e_len

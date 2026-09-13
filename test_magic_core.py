@@ -2,6 +2,20 @@
 import math
 from magic_core import SpeedEstimator, BurstMachine, elastic_burst
 
+def test_wiggle_needs_reversals():
+    from magic_core import WiggleDetector
+    d = WiggleDetector()
+    # one straight fast sweep: 200px in ~50ms -> must NOT fire
+    for i in range(4):
+        assert d.feed(0.100 + i*0.016, 100 + i*80, 300) is False
+    d2 = WiggleDetector()
+    # left-right-left wiggle at >=900 px/s -> fires exactly once
+    # (plan fix: last reversal is the firing sample, so drop the trailing
+    #  point that would fire it mid-gesture and assert fired[-1])
+    pts = [(0,0),(0,120),(0,10),(0,130)]             # x sweeps back and forth
+    fired = [d2.feed(0.1 + i*0.03, 400 + p[1], 400 + p[0]) for i, p in enumerate(pts)]
+    assert fired.count(True) == 1 and fired[-1]
+
 def test_speed_measures_window():
     e = SpeedEstimator(window_s=0.05)
     t0 = 1000.0

@@ -27,6 +27,14 @@ def test_spring_curve():
     mid = [elastic_burst(i / 50) for i in range(50)]  # below 1.0 only
     assert max(mid) > 1.05                           # must overshoot (macOS feel)
 
+def test_pack_loading():
+    import os
+    from magic_core import load_packs, decode_frames
+    packs = load_packs(os.path.join(os.path.dirname(__file__), "packs"))
+    assert "default" in packs
+    fr, du = decode_frames(packs["default"]["emotions"]["anger"]["path"])
+    assert len(fr) == 8 and abs(du[0] - 0.08) < 0.01
+
 if __name__ == "__main__":
     for fn in [v for k, v in sorted(globals().items()) if k.startswith("test_")]:
         fn(); print("ok", fn.__name__)

@@ -79,6 +79,9 @@ def load_packs(pack_dir):
                 m = json.load(f)
             m.setdefault("name", name)
             m["_dir"] = d
+            for spec in m.get("emotions", {}).values():
+                if "path" in spec:
+                    spec["path"] = os.path.join(d, spec["path"])
             packs[m["name"]] = m
     return packs
 

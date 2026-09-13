@@ -1,14 +1,14 @@
 #!/usr/bin/env /usr/bin/python3
-"""dusky-cursor-magic: flick the mouse -> an emotion bursts over the cursor in a
-glass glow, wobbles, shrinks away. Click-through; the real cursor is untouched.
+"""dusky-cursor-magic: wiggle the mouse -> an emotion bursts over the cursor in a
+dreamy glow, breathes, fades away. Click-through; the real cursor is untouched.
 Run: /usr/bin/python3 cursor_magic.py [--demo EMOTION] [-c config.json]"""
-import gi, json, math, os, random, socket, sys, time
+import gi, json, math, os, random, socket, subprocess, sys, time
 import cairo
 gi.require_version("Gtk", "3.0"); gi.require_version("Gdk", "3.0")
 gi.require_version("GdkPixbuf", "2.0"); gi.require_version("GtkLayerShell", "0.1")
 from gi.repository import Gtk, Gdk, GdkPixbuf, GtkLayerShell, GLib
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-from magic_core import SpeedEstimator, BurstMachine, load_packs, decode_frames, load_config
+from magic_core import WiggleDetector, BurstMachine, load_packs, decode_frames, load_config
 
 PACK_DIRS = [os.path.expanduser("~/.config/dusky/cursor-magic/packs"),
              os.path.join(os.path.dirname(os.path.abspath(__file__)), "packs")]
@@ -25,12 +25,13 @@ class Daemon:
     def __init__(self, cfg, demo=None):
         self.cfg, self.demo = cfg, demo
         self.sock_path = hypr_socket_path()
-        self.est = SpeedEstimator()
+        self.wig = WiggleDetector(**cfg["wiggle"])
+        self._prev = time.perf_counter()
         self.machine = None
         self.pixbufs, self.durations, self.total, self.pack_time = [], [], 0.0, 0.0
         self.build_window()
-        self.rule(True)
-        GLib.timeout_add(16, self.tick)
+        self.apply_rules()
+        GLib.timeout_add(cfg.get("tick_ms", 8), self.tick)
 
     # window ----------------------------------------------------------------
     def build_window(self):
@@ -52,10 +53,16 @@ class Daemon:
         self.win.connect("draw", self.draw)
         # stays hidden until a burst: no surface when idle => nothing can block clicks
 
-    def rule(self, on):
-        # click-through compositor-side, belt & braces (Hyprland 0.56 Lua rule)
-        self.hypr(f'eval pcall(hl.layer_rule,{{namespace="dusky-cursor-magic",'
-                  f'pass_mouse_through={"true" if on else "false"}}})')
+    def apply_rules(self):
+        # one layerrule per Hyprland session (no read API in 0.56.2; marker keyed
+        # by instance signature — new session, new sig, rule re-added as needed)
+        marker = os.path.expanduser(f"~/.cache/dusky-cursor-magic/rule-{os.path.basename(self.sock_path)}.ok")
+        if os.path.exists(marker):
+            return
+        self.hypr('eval pcall(hl.layer_rule,{namespace="dusky-cursor-magic",'
+                  'pass_mouse_through=true,blur=true,ignorezero=true,xray=true})')
+        os.makedirs(os.path.dirname(marker), exist_ok=True)
+        open(marker, "w").write("1")
 
     def hypr(self, cmd):
         try:
@@ -100,32 +107,28 @@ class Daemon:
         pos = self.cursor()
         if pos is None: return True
         now = time.perf_counter()
+        dt = min(now - self._prev, 0.05); self._prev = now
         if self.machine is None:
-            if self.demo is not None:
-                if self.show_emotion(self.demo):
-                    self.start(pos, now)
-                self.demo = None
-            elif self.est.feed(now, *pos) >= self.cfg["threshold"]:
-                if self.show_emotion(self.cfg["emotion"]):
-                    self.start(pos, now)
+            fired = (self.demo is not None) or self.wig.feed(now, *pos)
+            if fired:
+                name = self.demo or self.cfg["emotion"]; self.demo = None
+                if self.show_emotion(name):
+                    self.machine = BurstMachine(self.cfg["hold_s"], self.cfg["enter_s"],
+                                                self.cfg["exit_s"], self.cfg["cooldown_s"])
+                    if self.machine.trigger(now):
+                        self.position(pos); self.win.show_all()
+                        # map handler re-applies empty input shape
+                    else:
+                        self.machine = None
         else:
-            self.machine.update(now, self.est.speed(now))
-            self.pack_time += 0.016
+            self.machine.update(now)
+            self.pack_time += dt                      # real dt — fixes GIF stutter
             if self.machine.state == "idle":
                 self.machine = None; self.pixbufs = []
-                self.win.hide()   # unmap: surface gone until next flick
+                self.win.hide()   # unmap: surface gone until next wiggle
         if self.machine:
-            self.position(pos)
-            self.win.queue_draw()
+            self.position(pos); self.win.queue_draw()
         return True
-
-    def start(self, pos, now):
-        c = self.cfg
-        self.machine = BurstMachine(c["threshold"], c["hold_s"], c["shrink_s"],
-                                    c["cooldown_s"], c["peak_scale"])
-        self.machine.trigger(now, *pos)
-        self.position(pos)
-        self.win.show_all()   # map now; "map" handler re-applies empty input shape
 
     def position(self, pos):
         C = self.cfg["canvas_px"]
@@ -138,20 +141,23 @@ class Daemon:
     def draw(self, w, cr):
         cr.set_operator(cairo.OPERATOR_CLEAR); cr.paint()
         m = self.machine
-        if not m or not self.pixbufs: return False
-        e = m.envelope
-        if e <= 0.02: return False
+        if not m or not self.pixbufs or m.alpha <= 0.003: return False
         C = self.cfg["canvas_px"]; cx, cy = getattr(self, "center", (C/2, C/2))
-        g = self.cfg["glass"]; col = g["color"]
-        fr = min(e * C / 2 * 0.9, C / 2 - 4)
-        # frosted halo (real blur behind comes from the layerrule below)
-        grad = cairo.RadialGradient(cx, cy, fr * 0.25, cx, cy, fr * 1.35)
-        grad.add_color_stop_rgba(0.0, *col, g["alpha"] * e)
-        grad.add_color_stop_rgba(0.75, *col, g["alpha"] * 0.35 * e)
-        grad.add_color_stop_rgba(1.0, *col, 0.0)
-        cr.set_operator(cairo.OPERATOR_OVER)
-        cr.set_source(grad); cr.arc(cx, cy, fr * 1.35, 0, 2 * math.tau); cr.fill()
-        # sprite frame, spring-scaled and wobbled
+        g = self.cfg["glow"]; col = g["color"]; a = m.alpha
+        cr.set_operator(cairo.OPERATOR_ADD)
+        R = g["outer_r"] * C                          # soft wide aura (no hard disc)
+        gr = cairo.RadialGradient(cx, cy, 0, cx, cy, R)
+        gr.add_color_stop_rgba(0.00, *col, g["soft_alpha"] * a)
+        gr.add_color_stop_rgba(0.45, *col, g["soft_alpha"] * 0.5 * a)
+        gr.add_color_stop_rgba(0.80, *col, g["soft_alpha"] * 0.12 * a)
+        gr.add_color_stop_rgba(1.00, *col, 0.0)
+        cr.set_source(gr); cr.paint()
+        r2 = 0.30 * C                                 # inner light right under the sprite
+        gr2 = cairo.RadialGradient(cx, cy, 0, cx, cy, r2)
+        gr2.add_color_stop_rgba(0.0, 1.0, 1.0, 1.0, g["inner_alpha"] * 0.7 * a)
+        gr2.add_color_stop_rgba(1.0, *col, 0.0)
+        cr.set_source(gr2); cr.paint()
+        # sprite frame at GIF-native cadence
         t = self.pack_time % self.total if self.total else 0.0
         acc = 0.0; i = 0
         for i, d in enumerate(self.durations):
@@ -159,27 +165,42 @@ class Daemon:
             if t < acc: break
         pb = self.pixbufs[min(i, len(self.pixbufs) - 1)]
         pw, ph = pb.get_width(), pb.get_height()
-        size = min(C * 0.5 * max(m.scale, 0.001), C * 0.92)
-        fit = size / max(pw, ph)               # keep aspect, fit in box
-        cr.save(); cr.translate(cx, cy); cr.rotate(math.sin(m.wobble) * 0.08)
-        cr.scale(pw * fit / pw, ph * fit / ph)
-        Gdk.cairo_set_source_pixbuf(cr, pb, -pw * fit / 2, -ph * fit / 2)
+        size = C * 0.62 * m.scale                     # near-final size on frame 1: no grow-pop
+        fit = size / max(pw, ph)
+        dw, dh = pw * fit, ph * fit
+        cr.save(); cr.translate(cx, cy); cr.rotate(m.rot)
+        # bloom: cheap 4x downscale-upscale of the sprite, additive
+        bp = pb.scale_simple(max(1, pw // 4), max(1, ph // 4), GdkPixbuf.InterpType.BILINEAR) \
+             .scale_simple(max(1, int(dw / 4)), max(1, int(dh / 4)), GdkPixbuf.InterpType.NEAREST)
+        Gdk.cairo_set_source_pixbuf(cr, bp, -dw / 2, -dh / 2)
+        cr.get_source().set_filter(cairo.FILTER_BILINEAR)
+        cr.paint_with_alpha(g["bloom_alpha"] * a)
+        # sprite
+        Gdk.cairo_set_source_pixbuf(cr, pb, -dw / 2, -dh / 2)
         cr.get_source().set_filter(cairo.FILTER_GOOD)
-        cr.paint_with_alpha(min(e * 4.0, 1.0)); cr.restore()
+        cr.paint_with_alpha(a)
+        cr.restore()
+        self._particles(cr, cx, cy, m.age, a)
         return False
 
-    # blur: ask Hyprland for a real frosted glass behind us ------------------
-    def enable_blur(self):
-        if self.cfg.get("blur_layerrule"):
-            self.hypr('eval pcall(hl.layer_rule,{namespace="dusky-cursor-magic",'
-                      'blur=true,ignorezero=true})')
+    def _particles(self, cr, cx, cy, t, a):
+        n = self.cfg.get("sparkles", 8)
+        for i in range(n):
+            ang = t * 0.6 + i * math.tau / n
+            r = 150 + 30 * math.sin(t * 1.1 + i * 2.1)
+            px, py = cx + r * math.cos(ang), cy + r * math.sin(ang) * 0.72 - 20 * math.sin(t + i)
+            tw = 0.5 + 0.5 * math.sin(t * 3.0 + i * 1.7)
+            s = 1.8 + 2.0 * tw
+            cr.set_source_rgba(1.0, 0.93, 0.99, a * (0.20 + 0.5 * tw))
+            cr.arc(px, py, s, 0, 2 * math.tau); cr.fill()
+            cr.set_source_rgba(1.0, 1.0, 1.0, a * 0.8 * tw)
+            cr.arc(px, py, s * 0.35, 0, 2 * math.tau); cr.fill()
 
 def main():
     a = sys.argv[1:]
     demo = a[a.index("--demo") + 1] if "--demo" in a and a.index("--demo") + 1 < len(a) else ("random" if "--demo" in a else None)
     cfg = load_config(a[a.index("-c") + 1] if "-c" in a else None)
-    d = Daemon(cfg, demo=demo)
-    d.enable_blur()
+    Daemon(cfg, demo=demo)
     Gtk.main()
 
 if __name__ == "__main__":

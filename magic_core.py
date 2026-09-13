@@ -1,11 +1,16 @@
-"""Pure logic for dusky-cursor-magic. No gi/evdev imports — testable headless."""
-import json, math, os, time
+"""Pure logic for dusky-cursor-magic. No gi/evdev imports — testable headless.
+
+macOS find-my-cursor is ALIVE because it tracks motion continuously: shake
+harder -> pointer bigger, stop -> shrinks. We mirror that: WiggleDetector
+accumulates a `heat` signal (velocity-weighted, exp decay), AuraMachine is a
+spring-damper follower of that heat, and StarField throws Starlight's
+signature burst of spreading stars on every reversal.
+"""
+import json, math, os, random, time
 
 
 class SpeedEstimator:
-    """Sliding-window |dx|+|dy| px/s.
-    # ponytail: O(n) list, n = events in ~50 ms (< ~50). Use a deque if
-    # window_s ever grows past ~1s."""
+    """Sliding-window |dx|+|dy| px/s."""
     def __init__(self, window_s=0.05):
         self.window_s = window_s
         self._s = []  # (t, px)
@@ -15,7 +20,6 @@ class SpeedEstimator:
         self._s.append((t if t is not None else time.monotonic(), abs(dx) + abs(dy)))
 
     def feed(self, t, x, y):
-        """Absolute pointer pos -> windowed px/s."""
         if self._last:
             self.add(x - self._last[1], y - self._last[2], t)
         self._last = (t, x, y)
@@ -30,113 +34,151 @@ class SpeedEstimator:
         return sum(p for _, p in self._s) / span
 
 
-def ease_out_cubic(p):
-    return 1 - (1 - p) ** 3
-
-
 class WiggleDetector:
-    """macOS 'find my cursor': N velocity reversals with real speed inside
-    window_s. One straight swipe = 0 reversals, so it never fires."""
-    def __init__(self, window_s=0.35, min_speed=900.0, need=2):
+    """Heat signal, not a switch. Each velocity reversal >= min_speed
+    deposits gain * min(1, speed/reversal_speed) into .heat; heat decays
+    exponentially (tau_s). .fired pulses once per burst past arm_heat."""
+    def __init__(self, window_s=0.35, min_speed=900.0, need=2,
+                 tau_s=0.30, gain=0.45, reversal_speed=4000.0, arm_heat=0.55):
         self.window_s, self.min_speed, self.need = window_s, min_speed, need
+        self.tau_s, self.gain, self.rs = tau_s, gain, reversal_speed
+        self.arm_heat = arm_heat
+        self.heat = 0.0
+        self.rev_count = 0            # monotonic; daemon diffs it for star bursts
         self._v, self._rev, self._last = [], [], None
+        self._armed = False
 
     def feed(self, t, x, y):
+        """-> True on the tick heat first crosses arm_heat (one pulse)."""
         fired = False
         if self._last:
             dt = max(t - self._last[0], 1e-4)
+            self.heat *= math.exp(-dt / self.tau_s)        # decay every sample
             vx, vy = (x - self._last[1]) / dt, (y - self._last[2]) / dt
+            sp = math.hypot(vx, vy)
             if self._v:
                 pvx, pvy = self._v[-1][1], self._v[-1][2]
-                if (math.hypot(vx, vy) >= self.min_speed
+                if (sp >= self.min_speed
                         and math.hypot(pvx, pvy) >= self.min_speed
                         and vx * pvx + vy * pvy < 0):
                     self._rev.append(t)
+                    self.rev_count += 1
+                    self.heat = min(1.0, self.heat + self.gain * min(1.0, sp / self.rs))
             self._v.append((t, vx, vy))
             self._v = [s for s in self._v if t - s[0] <= self.window_s]
             self._rev = [r for r in self._rev if t - r <= self.window_s]
-            if len(self._rev) >= self.need:
+            if self.heat >= self.arm_heat and not self._armed:
+                self._armed = True
                 fired = True
-                self._rev.clear()
+            elif self.heat < self.arm_heat * 0.5:
+                self._armed = False            # re-arm once calm (hysteresis)
         self._last = (t, x, y)
         return fired
 
+    @property
+    def settled(self):
+        return self.heat < 0.02
 
-def _ease_out_sine(u):
-    return math.sin(u * math.pi / 2)
 
-
-class BurstMachine:
-    """enter -> hold -> exit -> idle. Absolute age = no phase snaps.
-    Profile-driven envelope (research/find-my-cursor.md): grows from
-    start_scale to peak_scale (macOS ~2x), breathes, shrinks back smooth.
-    update(t, speed) -> (state, alpha, scale, rot, age)."""
+class AuraMachine:
+    """Critically-tuned spring follower of heat: scale/alpha chase
+    start + (peak-start)*heat with zero steady-state error and no overshoot
+    pop — butter growing AND shrinking, alive like macOS."""
     PROFILES = {
-        "macos":   {"enter": 1.0, "hold": 1.0, "exit": 1.0, "breathe": 1.0},
-        "smooth":  {"enter": 1.35, "hold": 1.0, "exit": 1.25, "breathe": 0.8},
-        "snappy":  {"enter": 0.75, "hold": 0.8, "exit": 0.65, "breathe": 1.2},
-        "reduced": {"enter": 1.0, "hold": 1.0, "exit": 1.0, "breathe": 0.0},
+        "macos":   {"peak": 2.2, "start": 0.35, "k": 180.0, "zeta": 0.9},
+        "smooth":  {"peak": 2.0, "start": 0.4,  "k": 90.0,  "zeta": 1.0},
+        "snappy":  {"peak": 2.4, "start": 0.3,  "k": 300.0, "zeta": 0.85},
+        "reduced": {"peak": 1.0, "start": 1.0,  "k": 120.0, "zeta": 1.0},
     }
 
-    def __init__(self, hold_s=1.4, enter_s=0.35, exit_s=0.28, cooldown_s=0.8,
-                 peak_scale=1.8, start_scale=0.35, profile="macos",
-                 ring=True, breathe_sine=1.0):
-        self.hold, self.enter, self.exit, self.cool = hold_s, enter_s, exit_s, cooldown_s
-        self.state, self.t0, self.last_end = "idle", 0.0, -9e9
-        self.alpha, self.scale, self.rot, self.age = 0.0, 0.0, 0.0, 0.0
-        self.ring, self.ring_alpha = 0.0, 0.0
-        self._peak, self._start = peak_scale, start_scale
-        p = self.PROFILES.get(profile, self.PROFILES["macos"])
+    def __init__(self, peak_scale=None, start_scale=None, k=None, zeta=None,
+                 profile="macos", age_s=None):
+        p = dict(self.PROFILES.get(profile, self.PROFILES["macos"]))
+        if peak_scale is not None: p["peak"] = peak_scale
+        if start_scale is not None: p["start"] = start_scale
+        if k is not None: p["k"] = k
+        if zeta is not None: p["zeta"] = zeta
+        self.peak, self.start = p["peak"], p["start"]
+        self._k, self._z = p["k"], p["zeta"]
         self._reduced = profile == "reduced"
-        self._ke, self._kh, self._kx = p["enter"], p["hold"], p["exit"]
-        self._breathe = p["breathe"] * (0.0 if self._reduced else breathe_sine)
-        self._ring = ring and not self._reduced
+        self.age_s = age_s or 4.0
+        self.scale = self.start
+        self.alpha = 0.0
+        self.v = 0.0                      # scale velocity (spring)
+        self.av = 0.0                     # alpha velocity
+        self._t = None
+        self._settled_at = None
+        self._peak_heat = 0.0
 
-    def trigger(self, t):
-        if self.state != "idle" or t - self.last_end < self.cool:
-            return False
-        self.state, self.t0, self.age = "enter", t, 0.0
-        return True
-
-    def update(self, t, speed=0.0):
-        if self.state == "idle":
-            self.alpha = self.scale = self.rot = self.ring_alpha = 0.0
-            return ("idle", 0.0, 0.0, 0.0, 0.0)
-        a = self.age = t - self.t0
-        e_len = self.enter * self._ke
-        h_end = e_len + self.hold * self._kh
-        x_end = h_end + self.exit * self._kx
-        if a < e_len:                       # grow: start -> peak, butter easeInOutSine
-            self.state = "enter"
-            u = a / e_len
-            s = 0.5 - 0.5 * math.cos(u * math.pi)   # smooth in AND out, no initial pop
-            self.scale = self._start + (self._peak - self._start) * s
-            self.alpha = 0.35 + 0.65 * s            # visible from frame one, trails size
-        elif a < h_end:                     # hold at peak, gentle breathe
-            self.state = "hold"
-            h = a - e_len
-            self.scale = self._peak * (1.0 + 0.012 * self._breathe
-                                       * math.sin(h * 2 * math.pi / 1.6))
-            self.alpha = 1.0
-        elif a < x_end:                     # exit: peak -> 0, butter easeInOutSine shrink
-            self.state = "exit"
-            u = (a - h_end) / (self.exit * self._kx)
-            self.scale = self._peak * (0.5 + 0.5 * math.cos(u * math.pi))  # 1->0, zero-velocity both ends
-            self.alpha = 1.0 - u * u
-        else:
-            self.state, self.last_end = "idle", t
-            self.alpha = self.scale = self.rot = self.ring_alpha = 0.0
-            return (self.state, 0.0, 0.0, 0.0, self.age)
-        if self._reduced:                   # reduced motion: alpha only, no move
+    def update(self, t, heat):
+        """heat in [0,1]. dt from previous t (8ms ticks)."""
+        dt = 0.0 if self._t is None else min(max(t - self._t, 0.0), 0.05)
+        self._t = t
+        heat = max(0.0, min(1.0, heat))
+        self._peak_heat = max(self._peak_heat, heat)
+        c = 2 * math.sqrt(self._k) * self._z
+        tgt = self.start + (self.peak - self.start) * heat
+        self.v += (-self._k * (self.scale - tgt) - c * self.v) * dt
+        self.scale += self.v * dt
+        ta = 1.0 if heat > 0.02 else 0.0          # full opacity while hot
+        self.av += (-150.0 * (self.alpha - ta) - 2 * math.sqrt(150.0) * self.av) * dt
+        self.alpha = max(0.0, self.alpha + self.av * dt)
+        if self._reduced:
             self.scale = 1.0
-        if self._ring and self.state == "enter":   # KDE-style ring on enter
-            u = a / e_len
-            self.ring = 0.25 + 0.75 * _ease_out_sine(u)
-            self.ring_alpha = (1.0 - u) * 0.6
+        if abs(self.scale - tgt) < 0.01 and abs(self.v) < 0.05 and heat < 0.02:
+            if self._settled_at is None:
+                self._settled_at = t
         else:
-            self.ring_alpha = 0.0
-        self.rot = 0.014 * math.sin(a * 2 * math.pi / 2.4)   # ~0.8deg sway
-        return (self.state, max(0.0, self.alpha), self.scale, self.rot, self.age)
+            self._settled_at = None
+        return self.alpha
+
+    def settled(self, t):
+        return self._settled_at is not None and t - self._settled_at > 0.45
+
+    @property
+    def energy(self):
+        """0..1 heat-at-trigger; scales sparkles/stars/glow intensity."""
+        return self._peak_heat
+
+
+class StarField:
+    """Starlight's signature: a burst of 4-point stars that spread outward
+    from the cursor, twinkle, spin and fade. burst() per reversal pulse."""
+    def __init__(self, n=10, seed=None):
+        self.n = n
+        self.rng = random.Random(seed)
+        self._stars = []                    # (t0, ang, spd, size, life, spin, tw)
+
+    def burst(self, t, n=None):
+        for _ in range(n or self.n):
+            ang = self.rng.uniform(0, math.tau)
+            self._stars.append((t, ang,
+                                self.rng.uniform(260.0, 620.0),    # px/s outward
+                                self.rng.uniform(4.0, 11.0),       # size px
+                                self.rng.uniform(1.25, 1.9),       # life s
+                                self.rng.uniform(-2.5, 2.5),       # spin rad/s
+                                self.rng.uniform(0.5, 1.5)))       # twinkle rate
+        # ponytail: O(n) scan per frame; n capped at 120 — fine at 8ms ticks
+        if len(self._stars) > 120:
+            self._stars = self._stars[-120:]
+
+    def stars(self, t):
+        """yield (angle, radius, size, rot, alpha) for living stars."""
+        out = []
+        tau = 0.35                          # ease-out radius (fast launch, glide)
+        for (t0, ang, spd, size, life, spin, tw) in self._stars:
+            age = t - t0
+            if 0 <= age <= life:
+                r = spd * tau * (1.0 - math.exp(-age / tau))
+                u = age / life
+                a = (1.0 - u * u) * (0.65 + 0.35 * math.sin(age * tw * math.tau))
+                out.append((ang, r, size * (1.0 - 0.4 * u), spin * age, max(0.0, a)))
+        self._stars = [s for s in self._stars if 0 <= t - s[0] <= s[4]]
+        return out
+
+    @property
+    def count(self):
+        return len(self._stars)
 
 
 # ---- packs ------------------------------------------------------------------

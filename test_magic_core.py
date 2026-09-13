@@ -1,6 +1,6 @@
 """Zero-dep asserts: /usr/bin/python3 test_magic_core.py  (or pytest)."""
 import math
-from magic_core import SpeedEstimator, BurstMachine
+from magic_core import SpeedEstimator, AuraMachine, WiggleDetector, StarField
 
 
 def approx(v, tol=1e-6):
@@ -12,15 +12,11 @@ def approx(v, tol=1e-6):
     return A()
 
 def test_wiggle_needs_reversals():
-    from magic_core import WiggleDetector
     d = WiggleDetector()
     # one straight fast sweep: 200px in ~50ms -> must NOT fire
     for i in range(4):
         assert d.feed(0.100 + i*0.016, 100 + i*80, 300) is False
     d2 = WiggleDetector()
-    # left-right-left wiggle at >=900 px/s -> fires exactly once
-    # (plan fix: last reversal is the firing sample, so drop the trailing
-    #  point that would fire it mid-gesture and assert fired[-1])
     pts = [(0,0),(0,120),(0,10),(0,130)]             # x sweeps back and forth
     fired = [d2.feed(0.1 + i*0.03, 400 + p[1], 400 + p[0]) for i, p in enumerate(pts)]
     assert fired.count(True) == 1 and fired[-1]
@@ -32,122 +28,94 @@ def test_speed_measures_window():
     assert abs(e.speed(t0 + 0.02) - 5000) < 1      # 100px over 20ms span
     assert e.speed(t0 + 0.5) == 0.0                # aged out
 
-def test_burst_lifecycle():
-    m = BurstMachine(hold_s=1.0, enter_s=0.25, exit_s=0.3, cooldown_s=0.2,
-                     peak_scale=1.8, start_scale=0.35)
-    m.trigger(0.0)
-    assert m.update(0.0)[0] == "enter"
-    assert m.update(0.10)[0] == "enter" and 0.0 < m.alpha < 1.0 and 0.35 < m.scale < 1.8
-    assert m.update(0.30)[0] == "hold"  and m.alpha > 0.99 and abs(m.scale - 1.8) < 0.1
-    assert m.update(1.40)[0] == "exit"
-    assert m.update(1.75)[0] == "idle"  and m.alpha == 0.0
+# ---- heat: macOS-like "alive" accumulation ------------------------------
 
-def test_no_refire_during_burst():
-    m = BurstMachine(hold_s=1.0, enter_s=0.25, exit_s=0.3, cooldown_s=0.2)
-    m.trigger(0.0); m.trigger(0.1)                 # 2nd ignored while active
-    assert m.update(0.15)[0] == "enter"            # still first burst
-    # burst ends at 0.25+1.0+0.3 = 1.55, cooldown 0.2 -> no re-arm before 1.75
-    assert m.update(1.6)[0] == "idle"              # advance past end
-    assert m.trigger(1.6) is False                 # inside cooldown
-    assert m.trigger(2.1) is True                  # cooldown passed
-    assert m.update(2.15)[0] == "enter"
+def _shake(d, t0, reversals, speed_px=100.0):
+    fired = 0
+    for i in range(reversals + 1):
+        x = 400 + (i % 2) * speed_px
+        if d.feed(t0 + i*0.04, x, 400):
+            fired += 1
+    return fired
 
-def test_scale_continuous_across_phases():
-    m = BurstMachine(hold_s=1.0, enter_s=0.25, exit_s=0.3, cooldown_s=0.2)
-    m.trigger(0.0)
+def test_heat_rises_with_vigour():
+    gentle = WiggleDetector(); wild = WiggleDetector()
+    _shake(gentle, 0.0, 3, speed_px=95)     # ~2400 px/s reversals
+    _shake(wild, 0.0, 7, speed_px=160)      # ~4000 px/s, more reversals
+    assert wild.heat > gentle.heat > 0.1
+    assert wild.heat <= 1.0                 # capped
+
+def test_heat_decays_when_still():
+    d = WiggleDetector()
+    _shake(d, 0.0, 5)                       # 6 moves -> 4 velocity reversals
+    h0 = d.heat
+    for i in range(10):
+        d.feed(1.0 + i*0.05, 400, 400)      # parked mouse, no motion
+    assert 0.0 < d.heat < h0 * 0.7          # exponential decay, no refire
+    assert d.rev_count == 4
+
+def test_rev_count_sparks_stars():
+    d = WiggleDetector(); _shake(d, 0.0, 5)
+    assert d.rev_count == 4                 # monotonic, daemon diffs it
+
+# ---- aura: spring follower, butter both directions ----------------------
+
+def test_aura_follows_heat_smoothly():
+    a = AuraMachine(peak_scale=2.2, start_scale=0.35)
+    a.update(0.0, 0.0)
     prev = None; worst = 0.0
-    for i in range(220):
-        m.update(i * 0.008)   # daemon ticks at 8ms now (tick_ms=8)
-        if m.alpha > 0.02:    # only judge motion while actually visible
-            if prev is not None:
-                worst = max(worst, abs(m.scale - prev))
-            prev = m.scale
-        else:
-            prev = None
-    assert worst < 0.10          # grow from 0.35->1.8: steeper than old settle, but invisible while alpha~0 (see footprint test)
-
-# ---- I1: envelope grows from cursor size, smooth shrink, ring, reduced ----
-
-def test_envelope_grows_from_start_scale():
-    m = BurstMachine(enter_s=0.35, hold_s=1.4, exit_s=0.28, peak_scale=1.8,
-                     start_scale=0.35, profile="macos")
-    m.trigger(0.0)
-    assert m.update(0.0)[2] == approx(0.35)
-    prev = None
-    for i in range(0, 44):                 # through all of enter
-        m.update(i * 0.008)
+    for i in range(40):                     # heat snaps to 1.0 at t=0
+        a.update(i * 0.008, 1.0)
         if prev is not None:
-            assert m.scale >= prev - 1e-9  # monotonic grow
-        prev = m.scale
-    assert m.update(0.35)[2] == approx(1.8, 0.05)
+            worst = max(worst, abs(a.scale - prev))
+        prev = a.scale
+    assert a.scale > 2.0                    # reaches peak
+    assert worst < 0.12                     # grows smooth, never jumps
+def test_aura_shrinks_when_calm():
+    a = AuraMachine(); a.update(0.0, 0.0)
+    for i in range(60): a.update(i * 0.008, 1.0)          # fully grown
+    peak = a.scale
+    for i in range(120): a.update(0.5 + i * 0.008, 0.0)   # mouse calms
+    assert a.scale < peak * 0.35 and a.alpha < 0.15       # shrinks back
+    assert a.settled(1.6)
 
-def test_exit_shrinks_back_and_fades():
-    m = BurstMachine(enter_s=0.35, hold_s=1.4, exit_s=0.28, peak_scale=1.8,
-                     start_scale=0.35, profile="macos")
-    m.trigger(0.0)
-    m.update(0.4)
-    assert m.state == "hold" and m.scale > 1.7
-    m.update(0.35 + 1.4 + 0.14)            # mid exit
-    assert m.state == "exit" and 0.6 < m.scale < 1.8 and 0.0 < m.alpha < 1.0
-    m.update(0.35 + 1.4 + 0.28)            # end exit -> idle
-    assert m.state == "idle" and m.alpha == 0.0
+def test_aura_scales_between():
+    a = AuraMachine(); a.update(0.0, 0.0)
+    for i in range(40): a.update(i * 0.008, 0.3)          # gentle wiggle
+    calm = a.scale
+    for i in range(40): a.update(0.4 + i * 0.008, 1.0)    # then wild
+    assert calm > 0.5 and a.scale > calm + 0.4            # proportional
 
-def test_visible_footprint_continuous():
-    # what the eye sees = scale*alpha; no step > 0.12 at 8ms ticks
-    m = BurstMachine(enter_s=0.35, hold_s=1.4, exit_s=0.28, peak_scale=1.8,
-                     start_scale=0.35, profile="macos")
-    m.trigger(0.0)
-    prev = None; worst = 0.0
-    for i in range(260):
-        m.update(i * 0.008)
-        f = m.scale * m.alpha
-        if prev is not None:
-            worst = max(worst, abs(f - prev))
-        prev = f
-    assert worst < 0.12
+def test_reduced_motion_no_scale_change():
+    a = AuraMachine(profile="reduced"); a.update(0.0, 0.0)
+    for i in range(60): a.update(i * 0.008, 1.0)
+    assert a.scale == 1.0 and a.alpha > 0.9
 
-def test_ring_expands_on_enter_then_gone():
-    m = BurstMachine(enter_s=0.35, hold_s=1.4, exit_s=0.28, peak_scale=1.8,
-                     start_scale=0.35, profile="macos", ring=True)
-    m.trigger(0.0)
-    m.update(0.175)
-    assert 0.3 < m.ring < 0.8 and m.ring_alpha > 0.0
-    m.update(0.4)                          # hold: ring finished, faded
-    assert m.ring_alpha == 0.0
-    m2 = BurstMachine(profile="macos", ring=False); m2.trigger(0); m2.update(0.1)
-    assert m2.ring_alpha == 0.0
+# ---- starfield: Starlight's signature ------------------------------------
 
-def test_reduced_profile_alpha_only():
-    m = BurstMachine(enter_s=0.35, hold_s=1.4, exit_s=0.28, peak_scale=1.8,
-                     start_scale=0.35, profile="reduced")
-    m.trigger(0.0)
-    m.update(0.1)
-    assert m.scale == 1.0                  # no movement at all
-    assert 0.0 < m.alpha < 1.0
-    m.update(0.36)
-    assert m.scale == 1.0 and approx(1.0, 0.01) == m.alpha
+def test_stars_burst_and_live():
+    s = StarField(n=10)
+    s.burst(0.0); assert s.count == 10
+    at = list(s.stars(0.3))
+    assert len(at) == 10
+    assert all(r > 8 for _, r, _, _, _ in at)           # spread outward
+    assert all(0.0 < al <= 1.0 for *_, al in at)
+    s.burst(0.4)
+    assert len(list(s.stars(1.6))) >= 6                  # survivors keep flying
+    assert len(list(s.stars(2.5))) == 0                  # all dead by 2.5s
 
-def test_breathe_scales_with_config():
-    def mk(b):
-        m = BurstMachine(enter_s=0.35, hold_s=1.4, exit_s=0.28, peak_scale=1.8,
-                         start_scale=0.35, profile="macos", breathe_sine=b)
-        m.trigger(0.0)
-        for _ in range(6):                 # settle: avoid sine trough start
-            m.update(0.36 + _ * 0.02)
-        vals = []
-        for i in range(160):                       # stay inside hold (0.35..1.75)
-            m.update(0.37 + i * 0.008)
-            vals.append(m.scale)
-        return max(vals) - min(vals)
-    assert mk(0.0) < 0.005                 # config 0 = no wobble
-    assert 0.02 < mk(1.0) < 0.12           # default: ~3% of peak visible
+def test_star_cap():
+    s = StarField(n=40)
+    for i in range(6): s.burst(i * 0.5)
+    assert s.count <= 120
 
 def test_pack_loading():
     import os
     from magic_core import load_packs, decode_frames, load_config
-    assert load_config()["wiggle"]["need"] == 2
-    mo = load_config()["motion"]
-    assert mo["profile"] in ("macos", "smooth", "snappy", "auto")
+    cfg = load_config()
+    assert cfg["stars"]["per_burst"] == 10
+    assert cfg["wiggle"]["need"] == 2
+    mo = cfg["motion"]
     assert 1.4 <= mo["peak_scale"] <= 3.0
     assert load_config.__doc__
     packs = load_packs(os.path.join(os.path.dirname(__file__), "packs"))

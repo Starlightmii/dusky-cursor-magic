@@ -44,10 +44,13 @@ class Daemon:
             GtkLayerShell.set_anchor(self.win, edge, True)
         GtkLayerShell.set_exclusive_zone(self.win, -1)
         # click-through client-side: empty input region (verified by gate test)
-        self.win.connect("realize", lambda w:
-            w.get_window().input_shape_combine_region(cairo.Region(), 0, 0))
+        def _pt(w):
+            w.get_window().input_shape_combine_region(cairo.Region(), 0, 0)
+        self.win.connect("realize", _pt)
+        self.win.connect("map", _pt)
+        GtkLayerShell.set_namespace(self.win, "dusky-cursor-magic")
         self.win.connect("draw", self.draw)
-        self.win.show_all()
+        # stays hidden until a burst: no surface when idle => nothing can block clicks
 
     def rule(self, on):
         # click-through compositor-side, belt & braces (Hyprland 0.56 Lua rule)
@@ -110,8 +113,10 @@ class Daemon:
             self.pack_time += 0.016
             if self.machine.state == "idle":
                 self.machine = None; self.pixbufs = []
-        self.position(pos)
-        self.win.queue_draw()
+                self.win.hide()   # unmap: surface gone until next flick
+        if self.machine:
+            self.position(pos)
+            self.win.queue_draw()
         return True
 
     def start(self, pos, now):
@@ -119,12 +124,15 @@ class Daemon:
         self.machine = BurstMachine(c["threshold"], c["hold_s"], c["shrink_s"],
                                     c["cooldown_s"], c["peak_scale"])
         self.machine.trigger(now, *pos)
+        self.position(pos)
+        self.win.show_all()   # map now; "map" handler re-applies empty input shape
 
     def position(self, pos):
         C = self.cfg["canvas_px"]
-        for edge, v in ((GtkLayerShell.Edge.LEFT, pos[0] - C // 2),
-                        (GtkLayerShell.Edge.TOP, pos[1] - C // 2)):
-            GtkLayerShell.set_margin(self.win, edge, max(0, v))
+        ml = max(0, pos[0] - C // 2); mt = max(0, pos[1] - C // 2)
+        GtkLayerShell.set_margin(self.win, GtkLayerShell.Edge.LEFT, ml)
+        GtkLayerShell.set_margin(self.win, GtkLayerShell.Edge.TOP, mt)
+        self.center = (pos[0] - ml, pos[1] - mt)   # sprite stays on cursor at edges
 
     # paint -----------------------------------------------------------------
     def draw(self, w, cr):
@@ -133,7 +141,7 @@ class Daemon:
         if not m or not self.pixbufs: return False
         e = m.envelope
         if e <= 0.02: return False
-        C = self.cfg["canvas_px"]; cx = cy = C / 2
+        C = self.cfg["canvas_px"]; cx, cy = getattr(self, "center", (C/2, C/2))
         g = self.cfg["glass"]; col = g["color"]
         fr = min(e * C / 2 * 0.9, C / 2 - 4)
         # frosted halo (real blur behind comes from the layerrule below)
@@ -157,7 +165,7 @@ class Daemon:
         cr.scale(pw * fit / pw, ph * fit / ph)
         Gdk.cairo_set_source_pixbuf(cr, pb, -pw * fit / 2, -ph * fit / 2)
         cr.get_source().set_filter(cairo.FILTER_GOOD)
-        cr.paint(); cr.restore()
+        cr.paint_with_alpha(min(e * 4.0, 1.0)); cr.restore()
         return False
 
     # blur: ask Hyprland for a real frosted glass behind us ------------------

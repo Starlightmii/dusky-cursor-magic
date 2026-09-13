@@ -106,21 +106,22 @@ class BurstMachine:
         e_len = self.enter * self._ke
         h_end = e_len + self.hold * self._kh
         x_end = h_end + self.exit * self._kx
-        if a < e_len:                       # grow: start -> peak, easeOutSine
+        if a < e_len:                       # grow: start -> peak, butter easeInOutSine
             self.state = "enter"
             u = a / e_len
-            self.scale = self._start + (self._peak - self._start) * _ease_out_sine(u)
-            self.alpha = min(1.0, u * 1.8)  # fade-in behind the growth
+            s = 0.5 - 0.5 * math.cos(u * math.pi)   # smooth in AND out, no initial pop
+            self.scale = self._start + (self._peak - self._start) * s
+            self.alpha = min(1.0, u * 1.6)  # fade-in trails the growth start
         elif a < h_end:                     # hold at peak, gentle breathe
             self.state = "hold"
             h = a - e_len
             self.scale = self._peak * (1.0 + 0.012 * self._breathe
                                        * math.sin(h * 2 * math.pi / 1.6))
             self.alpha = 1.0
-        elif a < x_end:                     # exit: peak -> start, quad shrink
+        elif a < x_end:                     # exit: peak -> 0, butter easeInOutSine shrink
             self.state = "exit"
             u = (a - h_end) / (self.exit * self._kx)
-            self.scale = self._start + (self._peak - self._start) * (1.0 - u) ** 2
+            self.scale = self._peak * (0.5 + 0.5 * math.cos(u * math.pi))  # 1->0, zero-velocity both ends
             self.alpha = 1.0 - u * u
         else:
             self.state, self.last_end = "idle", t

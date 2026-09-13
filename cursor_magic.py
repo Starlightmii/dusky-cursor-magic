@@ -13,6 +13,18 @@ from magic_core import WiggleDetector, BurstMachine, load_packs, decode_frames, 
 PACK_DIRS = [os.path.expanduser("~/.config/dusky/cursor-magic/packs"),
              os.path.join(os.path.dirname(os.path.abspath(__file__)), "packs")]
 
+def _auto_profile():
+    """motion.profile 'auto' -> reduced if the desktop disables animations."""
+    try:
+        out = subprocess.run(["gsettings", "get", "org.gnome.desktop.interface",
+                              "enable-animations"], capture_output=True,
+                             text=True, timeout=1).stdout
+        if out.strip() == "false":
+            return "reduced"
+    except Exception:
+        pass
+    return "macos"
+
 def hypr_socket_path():
     sig = os.environ.get("HYPRLAND_INSTANCE_SIGNATURE", "")
     for base in (f"/run/user/{os.getuid()}/hypr/{sig}", f"/tmp/hypr/{sig}"):
@@ -113,8 +125,17 @@ class Daemon:
             if fired:
                 name = self.demo or self.cfg["emotion"]; self.demo = None
                 if self.show_emotion(name):
-                    self.machine = BurstMachine(self.cfg["hold_s"], self.cfg["enter_s"],
-                                                self.cfg["exit_s"], self.cfg["cooldown_s"])
+                    mo = self.cfg.get("motion", {})
+                    prof = mo.get("profile", "auto")
+                    if prof == "auto":
+                        prof = _auto_profile()
+                    self.machine = BurstMachine(
+                        self.cfg["hold_s"], self.cfg["enter_s"],
+                        self.cfg["exit_s"], self.cfg["cooldown_s"],
+                        peak_scale=mo.get("peak_scale", 1.8),
+                        start_scale=mo.get("start_scale", 0.35),
+                        profile=prof, ring=mo.get("ring", True),
+                        breathe_sine=mo.get("breathe_sine", 1.0))
                     if self.machine.trigger(now):
                         self.position(pos); self.win.show_all()
                         # map handler re-applies empty input shape
@@ -145,18 +166,24 @@ class Daemon:
         C = self.cfg["canvas_px"]; cx, cy = getattr(self, "center", (C/2, C/2))
         g = self.cfg["glow"]; col = g["color"]; a = m.alpha
         cr.set_operator(cairo.OPERATOR_ADD)
-        R = g["outer_r"] * C                          # soft wide aura (no hard disc)
+        es = m.scale / max(0.01, getattr(m, "_peak", 1.0))   # envelope 0..1 of peak
+        R = g["outer_r"] * C * (0.45 + 0.55 * es)            # aura grows WITH the sprite
         gr = cairo.RadialGradient(cx, cy, 0, cx, cy, R)
         gr.add_color_stop_rgba(0.00, *col, g["soft_alpha"] * a)
         gr.add_color_stop_rgba(0.45, *col, g["soft_alpha"] * 0.5 * a)
         gr.add_color_stop_rgba(0.80, *col, g["soft_alpha"] * 0.12 * a)
         gr.add_color_stop_rgba(1.00, *col, 0.0)
         cr.set_source(gr); cr.paint()
-        r2 = 0.30 * C                                 # inner light right under the sprite
+        r2 = 0.30 * C * (0.45 + 0.55 * es)
         gr2 = cairo.RadialGradient(cx, cy, 0, cx, cy, r2)
         gr2.add_color_stop_rgba(0.0, 1.0, 1.0, 1.0, g["inner_alpha"] * 0.7 * a)
         gr2.add_color_stop_rgba(1.0, *col, 0.0)
         cr.set_source(gr2); cr.paint()
+        if m.ring_alpha > 0.01:                              # KDE-style enter ring
+            cr.set_source_rgba(*col, m.ring_alpha)
+            cr.set_line_width(3.0 * (1.0 - m.ring / 1.2) + 1.0)
+            cr.arc(cx, cy, m.ring * C * 0.5, 0, 2 * math.tau)
+            cr.stroke()
         # sprite frame at GIF-native cadence
         t = self.pack_time % self.total if self.total else 0.0
         acc = 0.0; i = 0
@@ -165,7 +192,7 @@ class Daemon:
             if t < acc: break
         pb = self.pixbufs[min(i, len(self.pixbufs) - 1)]
         pw, ph = pb.get_width(), pb.get_height()
-        size = C * 0.62 * m.scale                     # near-final size on frame 1: no grow-pop
+        size = C * 0.35 * m.scale                     # start~63px (cursor-sized) -> peak~322px, fits canvas
         fit = size / max(pw, ph)
         dw, dh = pw * fit, ph * fit
         cr.save(); cr.translate(cx, cy); cr.rotate(m.rot)
@@ -185,9 +212,11 @@ class Daemon:
 
     def _particles(self, cr, cx, cy, t, a):
         n = self.cfg.get("sparkles", 8)
+        m = self.machine
+        es = (m.scale / max(0.01, getattr(m, "_peak", 1.0))) if m else 1.0
         for i in range(n):
             ang = t * 0.6 + i * math.tau / n
-            r = 150 + 30 * math.sin(t * 1.1 + i * 2.1)
+            r = (150 + 30 * math.sin(t * 1.1 + i * 2.1)) * (0.5 + 0.5 * es)
             px, py = cx + r * math.cos(ang), cy + r * math.sin(ang) * 0.72 - 20 * math.sin(t + i)
             tw = 0.5 + 0.5 * math.sin(t * 3.0 + i * 1.7)
             s = 1.8 + 2.0 * tw

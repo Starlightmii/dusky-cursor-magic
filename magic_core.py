@@ -62,13 +62,35 @@ class WiggleDetector:
         return fired
 
 
+def _ease_out_sine(u):
+    return math.sin(u * math.pi / 2)
+
+
 class BurstMachine:
-    """enter -> hold -> exit -> idle. All motion uses absolute age so phases
-    never snap. Publishes alpha/scale/rot for the painter."""
-    def __init__(self, hold_s=1.4, enter_s=0.28, exit_s=0.32, cooldown_s=0.8):
+    """enter -> hold -> exit -> idle. Absolute age = no phase snaps.
+    Profile-driven envelope (research/find-my-cursor.md): grows from
+    start_scale to peak_scale (macOS ~2x), breathes, shrinks back smooth.
+    update(t, speed) -> (state, alpha, scale, rot, age)."""
+    PROFILES = {
+        "macos":   {"enter": 1.0, "hold": 1.0, "exit": 1.0, "breathe": 1.0},
+        "smooth":  {"enter": 1.35, "hold": 1.0, "exit": 1.25, "breathe": 0.8},
+        "snappy":  {"enter": 0.75, "hold": 0.8, "exit": 0.65, "breathe": 1.2},
+        "reduced": {"enter": 1.0, "hold": 1.0, "exit": 1.0, "breathe": 0.0},
+    }
+
+    def __init__(self, hold_s=1.4, enter_s=0.35, exit_s=0.28, cooldown_s=0.8,
+                 peak_scale=1.8, start_scale=0.35, profile="macos",
+                 ring=True, breathe_sine=1.0):
         self.hold, self.enter, self.exit, self.cool = hold_s, enter_s, exit_s, cooldown_s
         self.state, self.t0, self.last_end = "idle", 0.0, -9e9
-        self.alpha, self.scale, self.rot, self.age = 0.0, 0.82, 0.0, 0.0
+        self.alpha, self.scale, self.rot, self.age = 0.0, 0.0, 0.0, 0.0
+        self.ring, self.ring_alpha = 0.0, 0.0
+        self._peak, self._start = peak_scale, start_scale
+        p = self.PROFILES.get(profile, self.PROFILES["macos"])
+        self._reduced = profile == "reduced"
+        self._ke, self._kh, self._kx = p["enter"], p["hold"], p["exit"]
+        self._breathe = p["breathe"] * (0.0 if self._reduced else breathe_sine)
+        self._ring = ring and not self._reduced
 
     def trigger(self, t):
         if self.state != "idle" or t - self.last_end < self.cool:
@@ -78,33 +100,42 @@ class BurstMachine:
 
     def update(self, t, speed=0.0):
         if self.state == "idle":
-            self.alpha, self.scale, self.rot = 0.0, 0.82, 0.0
-            return "idle", 0.0
-        self.age = t - self.t0
-        a = self.age
-        if a < self.enter:
-            p = a / self.enter
+            self.alpha = self.scale = self.rot = self.ring_alpha = 0.0
+            return ("idle", 0.0, 0.0, 0.0, 0.0)
+        a = self.age = t - self.t0
+        e_len = self.enter * self._ke
+        h_end = e_len + self.hold * self._kh
+        x_end = h_end + self.exit * self._kx
+        if a < e_len:                       # grow: start -> peak, easeOutSine
             self.state = "enter"
-            self.alpha = ease_out_cubic(p)
-            self.scale = 0.82 + 0.18 * ease_out_cubic(p)
-        elif a < self.enter + self.hold:
+            u = a / e_len
+            self.scale = self._start + (self._peak - self._start) * _ease_out_sine(u)
+            self.alpha = min(1.0, u * 1.8)  # fade-in behind the growth
+        elif a < h_end:                     # hold at peak, gentle breathe
             self.state = "hold"
+            h = a - e_len
+            self.scale = self._peak * (1.0 + 0.012 * self._breathe
+                                       * math.sin(h * 2 * math.pi / 1.6))
             self.alpha = 1.0
-            h = a - self.enter
-            self.scale = 1.0 + 0.02 * math.sin(2 * math.pi * 0.5 * h)     # breathe
-            self.rot = math.radians(1.2) * math.sin(2 * math.pi * 0.33 * h)  # sway
-        elif a < self.enter + self.hold + self.exit:
-            p = (a - self.enter - self.hold) / self.exit
+        elif a < x_end:                     # exit: peak -> start, quad shrink
             self.state = "exit"
-            self.alpha = 1.0 - ease_out_cubic(p)
-            # 0.18 (not plan's 0.08): exit must land on the 0.82 idle baseline
-            # or scale pops 0.92->0.82 at exit->idle — test_scale_continuous.
-            self.scale = 1.0 - 0.18 * ease_out_cubic(p)
+            u = (a - h_end) / (self.exit * self._kx)
+            self.scale = self._start + (self._peak - self._start) * (1.0 - u) ** 2
+            self.alpha = 1.0 - u * u
         else:
             self.state, self.last_end = "idle", t
-            self.alpha, self.rot = 0.0, 0.0
-            self.scale = 0.82
-        return self.state, max(0.0, min(1.0, a / (self.enter + self.hold + self.exit)))
+            self.alpha = self.scale = self.rot = self.ring_alpha = 0.0
+            return (self.state, 0.0, 0.0, 0.0, self.age)
+        if self._reduced:                   # reduced motion: alpha only, no move
+            self.scale = 1.0
+        if self._ring and self.state == "enter":   # KDE-style ring on enter
+            u = a / e_len
+            self.ring = 0.25 + 0.75 * _ease_out_sine(u)
+            self.ring_alpha = (1.0 - u) * 0.6
+        else:
+            self.ring_alpha = 0.0
+        self.rot = 0.014 * math.sin(a * 2 * math.pi / 2.4)   # ~0.8deg sway
+        return (self.state, max(0.0, self.alpha), self.scale, self.rot, self.age)
 
 
 # ---- packs ------------------------------------------------------------------

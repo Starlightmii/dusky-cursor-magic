@@ -51,6 +51,26 @@ def _wal_rgb(hexcol):
         return None
 
 
+def surface_lum(x, y):
+    """Mean luminance of the 40x40 patch just BELOW the pointer (offset so
+    the soul's own aura isn't in frame — it would read itself). grim -t png
+    -l 0 to stdout keeps it one subprocess, no temp file. None on failure."""
+    try:
+        import io
+        from PIL import Image
+        g = subprocess.run(
+            ["grim", "-g", f"{int(x) - 20},{int(y) + 30} 40x40",
+             "-t", "png", "-l", "0", "-"],
+            capture_output=True, timeout=1.0)
+        if g.returncode:
+            return None
+        a = np.asarray(Image.open(io.BytesIO(g.stdout)).convert("L"),
+                       np.float32) / 255.0
+        return float(a.mean())
+    except Exception:
+        return None
+
+
 def dusky_theme(path=None):
     """Auto colour: Dusky's pywal palette (~/.cache/wal/colors.json, rewritten
     every time the theme/wallpaper changes) -> (cool, warm) aura tints.
@@ -391,6 +411,8 @@ def main():
                     help="sync aura/stars to whatever plays through the speakers")
     ap.add_argument("--homing", choices=("on", "off"), default="on",
                     help="the soul leans toward the pointer, like a pet")
+    ap.add_argument("--surface", choices=("on", "off"), default="on",
+                    help="read what's UNDER the cursor: brighter over dark UI")
     args = ap.parse_args()
     C = args.canvas
 
@@ -537,6 +559,20 @@ def main():
             mus = None               # no audio tap -> soul behaves normally
     bob = [0.0, 0.0, 0.0, 0.0]       # homing spring x,y,vx,vy (the pet leans)
     twitch_at = [0.0]                # next idle micro-sparkle time
+    surf = [0.5, 0.0]                # surface lum EMA + last sample time
+    if args.surface == "on":
+        import threading
+
+        def _sense():                # 2 Hz: what is the soul hovering over?
+            while True:
+                time.sleep(0.5)
+                try:
+                    l = surface_lum(ptr[0], ptr[1])
+                except Exception:
+                    l = None
+                if l is not None:
+                    surf[0] += (l - surf[0]) * 0.25   # slow EMA: no strobing
+        threading.Thread(target=_sense, daemon=True).start()
     last = [None, None, None, 0.0]   # [pos, idle-pos, idle-hot, last-render]
     trail = [None]                   # slow EMA of screen pointer pos
     evsock = [None]
@@ -678,7 +714,10 @@ def main():
         last[1], last[2] = (x, y), hot
         # live knobs from studio sliders
         aura.grow = float(ac.get("grow", args.grow))
-        aura.ascale = float(ac.get("glow", args.glow)) * (1.0 + 0.5 * treb)
+        # surface: dark UI beneath the pointer -> the soul shines harder,
+        # bright paper -> it dims (contrast instinct, like a firefly)
+        surfk = 1.0 + (0.5 - surf[0]) * 0.5 if args.surface == "on" else 1.0
+        aura.ascale = float(ac.get("glow", args.glow)) * (1.0 + 0.5 * treb) * surfk
         aura.R0 = float(ac.get("radius", args.radius)) + 7.0 * bass
         aura.strength = float(ac.get("strength", args.strength)) * (1.0 + 0.35 * mid)
         aura.render(now - start, speed[0], energy[0], live, buf,

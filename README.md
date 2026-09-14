@@ -13,7 +13,14 @@ control panel.
   (answers dusklinux/dusky#343 for the cursor: themeable, zero config)
 - Fully **click-through** (input-shape recipe), single-instance flock,
   restores the system arrow on exit
-- ~22% CPU idle / 60fps active on a laptop iGPU (CPU numpy field, cairo blit)
+- **Music-synced** — taps the PipeWire speakers monitor, reads bass/mid/treble
+  + beat: the aura swells on the bass, brightens on hats, flares on kicks
+  while you're parked, and sprinkles stars on the downbeat mid-sweep
+- **Alive** — damped-spring homing lean (it swings after fast flicks like a
+  pet), idle twitch sparkles every few seconds so it never looks dead
+- GPU field on the Intel iGPU (`soul_gl.py`, GLES3 surfaceless): stars,
+  shockwaves, orb, aura in one fragment pass — ~3% CPU, auto CPU fallback
+- ~3% CPU idle / 60fps active
 
 ## Install
 
@@ -29,4 +36,8 @@ Tune in `~/.config/dusky/cursor-magic/config.json` → `soul` (`on`,
     /usr/bin/python3 test_orb_squash.py      # squash-along-motion
     /usr/bin/python3 test_click_parse.py     # evdev click parsing
     /usr/bin/python3 test_aura_screen.py     # real screen pixels: speed grows aura
+    /usr/bin/python3 test_stars.py           # galaxy burst/nova gates
+    /usr/bin/python3 test_shockwave.py       # Sedov vs linear ring
+    /usr/bin/python3 test_gl_parity.py       # GPU field == CPU field
+    /usr/bin/python3 test_music.py           # beat grid + bands, synthetic track
     bash scripts/selfcheck.sh                # layer alive + click-through

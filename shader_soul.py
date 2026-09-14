@@ -108,7 +108,7 @@ class Aura:
         self.ny = self.gy * 0.028
 
     def render(self, t, speed, energy, ripples, out, core=False,
-               hot=(0.0, 0.0), vel=(0.0, 0.0)):
+               hot=(0.0, 0.0), vel=(0.0, 0.0), trail=(0.0, 0.0)):
         """Fill ARGB32 numpy `out` (F x F view) with the current aura frame.
         hot = pointer offset from canvas centre in canvas px (non-zero at
         screen edges where the layer window clamps). Ripples carry
@@ -161,6 +161,14 @@ class Aura:
             # soft hole so the real cursor sprite stays crisp at the centre
             glow *= np.clip((r - 10.0) / 24.0, 0.0, 1.0)
             core_w = None
+        # comet tail: a fainter orb lagging behind the pointer (EMA fed by
+        # caller at ~1/3 the rate -> it trails and catches up, moonlight feel)
+        if core and trail != (0.0, 0.0):
+            tx, ty = trail[0] - hot[0], trail[1] - hot[1]
+            if math.hypot(tx, ty) > 6.0:
+                rt = np.hypot(rx - tx, ry - ty)
+                glow += np.exp(-((rt / (cr_ * 0.8)) ** 2)) * 0.8 * min(
+                    math.hypot(tx, ty) / 40.0, 1.0)
         a = np.clip(glow * self.ascale, 0.0, 1.0)
         tint = np.clip(wob * 0.6 + speed * 0.55 + energy * 0.35, 0.0, 1.0)[..., None]
         cool = np.array((0.42, 0.62, 1.00), np.float32)
@@ -285,6 +293,7 @@ def main():
     vel = [(0.0, 0.0)]                # smoothed per-frame pointer delta
     ripples = []                     # canvas-local (x-off, y-off, t0, s)
     last = [None, None, None, 0.0]   # [pos, idle-pos, idle-hot, last-render]
+    trail = [None]                   # slow EMA of screen pointer pos
     evsock = [None]
     start = time.monotonic()
     screen = [1920, 1080]
@@ -344,9 +353,15 @@ def main():
             vel[0] = (vel[0][0] + (dx - vel[0][0]) * va,
                       vel[0][1] + (dy - vel[0][1]) * va)
         last[0] = (x, y)
+        if trail[0] is None:
+            trail[0] = (float(x), float(y))
+        else:  # lag behind, catch up softly (0.18 ≈ 1/3 of the 0.55 shrink)
+            trail[0] = (trail[0][0] + (x - trail[0][0]) * 0.18,
+                        trail[0][1] + (y - trail[0][1]) * 0.18)
         ml = min(max(x - C // 2, 0), screen[0] - C)
         mt = min(max(y - C // 2, 0), screen[1] - C)
         hot = (float(x - ml - C // 2), float(y - mt - C // 2))
+        trail_hot = (trail[0][0] - ml - C / 2.0, trail[0][1] - mt - C / 2.0)
         hot_st[0], hot_st[1] = hot
         GtkLayerShell.set_margin(win, GtkLayerShell.Edge.LEFT, ml)
         GtkLayerShell.set_margin(win, GtkLayerShell.Edge.TOP, mt)
@@ -368,7 +383,8 @@ def main():
         aura.R0 = float(ac.get("radius", args.radius))
         aura.strength = float(ac.get("strength", args.strength))
         aura.render(now - start, speed[0], energy[0], live, buf,
-                    core=bool(ac.get("hide_arrow")), hot=hot, vel=vel[0])
+                    core=bool(ac.get("hide_arrow")), hot=hot, vel=vel[0],
+                    trail=trail_hot)
         surf_box[0] = cairo.ImageSurface.create_for_data(
             buf.view(np.uint8), cairo.FORMAT_ARGB32, F, F)
         area.queue_draw()

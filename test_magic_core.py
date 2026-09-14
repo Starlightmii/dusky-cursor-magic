@@ -119,9 +119,11 @@ def test_pack_loading():
     assert 1.4 <= mo["peak_scale"] <= 3.0
     assert load_config.__doc__
     packs = load_packs(os.path.join(os.path.dirname(__file__), "packs"))
-    assert set(packs) == {"anime"}
+    assert {"anime", "sigil3d"} <= set(packs)
     fr, du = decode_frames(packs["anime"]["emotions"]["girl"]["path"])
     assert len(fr) == 8
+    sig = packs["sigil3d"]["emotions"]["sigil"]
+    assert sig["type"] == "seq" and sig["frames"] >= 24
 
 if __name__ == "__main__":
     for fn in [v for k, v in sorted(globals().items()) if k.startswith("test_")]:

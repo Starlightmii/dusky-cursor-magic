@@ -1,0 +1,54 @@
+{
+ "name": "starlight",
+ "attribution": "OpenMoji CC BY-SA 4.0 (openmoji.org)",
+ "emotions": {
+  "comet": {
+   "type": "png",
+   "path": "comet.png"
+  },
+  "crescent": {
+   "type": "png",
+   "path": "crescent.png"
+  },
+  "dizzy": {
+   "type": "png",
+   "path": "dizzy.png"
+  },
+  "eight-pointed-star": {
+   "type": "png",
+   "path": "eight-pointed-star.png"
+  },
+  "first-quarter-moon": {
+   "type": "png",
+   "path": "first-quarter-moon.png"
+  },
+  "full-moon": {
+   "type": "png",
+   "path": "full-moon.png"
+  },
+  "glowing-star": {
+   "type": "png",
+   "path": "glowing-star.png"
+  },
+  "new-moon": {
+   "type": "png",
+   "path": "new-moon.png"
+  },
+  "shooting-star": {
+   "type": "png",
+   "path": "shooting-star.png"
+  },
+  "six-spoke-asterisk": {
+   "type": "png",
+   "path": "six-spoke-asterisk.png"
+  },
+  "sparkle": {
+   "type": "png",
+   "path": "sparkle.png"
+  },
+  "star": {
+   "type": "png",
+   "path": "star.png"
+  }
+ }
+}

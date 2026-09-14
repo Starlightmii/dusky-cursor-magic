@@ -387,6 +387,10 @@ def main():
                     help="overall brightness multiplier")
     ap.add_argument("--renderer", choices=("cpu", "gpu"), default="gpu",
                     help="aura field renderer (gpu = Intel iGPU GLES3; falls back to cpu)")
+    ap.add_argument("--music", choices=("on", "off"), default="on",
+                    help="sync aura/stars to whatever plays through the speakers")
+    ap.add_argument("--homing", choices=("on", "off"), default="on",
+                    help="the soul leans toward the pointer, like a pet")
     args = ap.parse_args()
     C = args.canvas
 
@@ -523,6 +527,16 @@ def main():
     ripples = []                     # canvas-local (x-off, y-off, t0, s)
     stars = Stars()                  # galaxy sparkles (canvas px coords)
     shed_pt = [None]                 # last trail-star spawn point (screen px)
+    mus = None
+    if args.music == "on":
+        try:
+            import music
+            mus = music.Music()
+            mus.start()
+        except Exception:
+            mus = None               # no audio tap -> soul behaves normally
+    bob = [0.0, 0.0, 0.0, 0.0]       # homing spring x,y,vx,vy (the pet leans)
+    twitch_at = [0.0]                # next idle micro-sparkle time
     last = [None, None, None, 0.0]   # [pos, idle-pos, idle-hot, last-render]
     trail = [None]                   # slow EMA of screen pointer pos
     evsock = [None]
@@ -607,6 +621,17 @@ def main():
         mt = min(max(y - C // 2, 0), screen[1] - C)
         hot = (float(x - ml - C // 2), float(y - mt - C // 2))
         trail_hot = (trail[0][0] - ml - C / 2.0, trail[0][1] - mt - C / 2.0)
+        if args.homing == "on":
+            # the pet leans: a damped spring drags the aura centre toward the
+            # pointer's motion, so fast flicks make it swing after you
+            tx = max(-14.0, min(14.0, vel[0][0] * 0.30))
+            ty = max(-14.0, min(14.0, vel[0][1] * 0.30))
+            bob[2] += (tx - bob[0]) * 0.10 - bob[2] * 0.22
+            bob[3] += (ty - bob[1]) * 0.10 - bob[3] * 0.22
+            bob[0] += bob[2]
+            bob[1] += bob[3]
+            hot = (hot[0] + bob[0], hot[1] + bob[1])
+            trail_hot = (trail_hot[0] + bob[0], trail_hot[1] + bob[1])
         hot_st[0], hot_st[1] = hot
         ptr[0], ptr[1] = x, y
         if nova_pt[0]:                               # place deferred shockwave
@@ -618,6 +643,20 @@ def main():
         GtkLayerShell.set_margin(win, GtkLayerShell.Edge.TOP, mt)
         poll_clicks(now)
         energy[0] *= 0.90
+        bass = mid = treb = beat = 0.0
+        if mus:
+            bass, mid, treb, beat = mus.poll(now)
+            if bass > 0.5 and beat > 0.25 and speed[0] < 0.3:
+                # a kick lands while you're parked: the soul flares a touch
+                energy[0] = max(energy[0], min(0.55, beat * 0.35))
+            if beat > 0.6 and speed[0] > 0.05:
+                # riding a fast sweep across the downbeat: sprinkle stars
+                stars.shed(now - start, x, y, size=0.5 + beat * 0.6)
+        # idle twitch: alone and still, the soul breathes a tiny sparkle
+        if (not mus or bass < 0.05) and speed[0] < 0.02 and now > twitch_at[0]:
+            twitch_at[0] = now + random.uniform(2.5, 5.0)
+            stars.shed(now - start, x + random.uniform(-8, 8),
+                       y + random.uniform(-8, 8), size=0.35)
         # tail stars: shed a sparkle whenever the trail orb has drifted >=26px
         # from the last spawn — sparkles mark the path, spaced, synced twinkle
         tp = trail[0]
@@ -639,9 +678,9 @@ def main():
         last[1], last[2] = (x, y), hot
         # live knobs from studio sliders
         aura.grow = float(ac.get("grow", args.grow))
-        aura.ascale = float(ac.get("glow", args.glow))
-        aura.R0 = float(ac.get("radius", args.radius))
-        aura.strength = float(ac.get("strength", args.strength))
+        aura.ascale = float(ac.get("glow", args.glow)) * (1.0 + 0.5 * treb)
+        aura.R0 = float(ac.get("radius", args.radius)) + 7.0 * bass
+        aura.strength = float(ac.get("strength", args.strength)) * (1.0 + 0.35 * mid)
         aura.render(now - start, speed[0], energy[0], live, buf,
                     core=bool(ac.get("hide_arrow")), hot=hot, vel=vel[0],
                     trail=trail_hot, stars=slive)

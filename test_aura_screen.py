@@ -38,6 +38,18 @@ def lit_ring(a, cx, cy, r0, r1):
 
 
 def main():
+    # stop any live soul so only OUR instance draws (two layers flood the
+    # field and saturate both baselines -> growth always reads 0)
+    pidf = os.path.expanduser("~/.cache/cursor-magic/soul.pid")
+    stopped = False
+    try:
+        pid = int(open(pidf).read().strip())
+        if open(f"/proc/{pid}/comm").read().strip() == "python3":
+            os.kill(pid, signal.SIGTERM)
+            stopped = True
+            time.sleep(0.7)
+    except (OSError, ValueError):
+        pass
     # center of screen, far from any dock/panel noise: 960,540
     put(960, 540)
     p = subprocess.Popen(["/usr/bin/python3", "-u",
@@ -66,6 +78,12 @@ def main():
         return 0 if ok else 1
     finally:
         os.kill(p.pid, signal.SIGTERM)
+        if stopped:   # put the live soul back
+            subprocess.Popen(["/usr/bin/python3", "-u",
+                              os.path.join(HERE, "shader_soul.py")],
+                             stdout=open("/tmp/soul.log", "w"),
+                             stderr=subprocess.STDOUT,
+                             start_new_session=True, cwd=HERE)
 
 
 if __name__ == "__main__":

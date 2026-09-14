@@ -1,7 +1,0 @@
-{
-  "name": "lantern3d",
-  "attribution": "Lantern.glb © 2017, Microsoft — CC0 v1.0 (KhronosGroup/glTF-Sample-Assets); turntable rendered by scripts/render3d_model.py",
-  "emotions": {
-    "lantern": {"type": "seq", "path": "", "frames": 48, "fps": 20}
-  }
-}

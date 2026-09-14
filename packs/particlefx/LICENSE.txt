@@ -1,5 +1,0 @@
-Kenney Particle Pack
-https://kenney.nl/assets/particle-pack
-License: CC0 1.0 Universal
-Author: Kenney (kenney.nl)
-12 of 80 sprites used.

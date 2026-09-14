@@ -21,6 +21,7 @@ import argparse
 import math
 import os
 import socket
+import subprocess
 import sys
 import time
 
@@ -32,6 +33,49 @@ import cairo  # noqa: E402
 import numpy as np  # noqa: E402
 
 RIPPLE_LIFE = 0.85
+
+
+def set_cursor_theme(theme, size):
+    subprocess.run(["hyprctl", "dispatch", "setcursor", str(theme), str(size)],
+                   capture_output=True, timeout=5)
+
+
+def _wal_rgb(hexcol):
+    h = (hexcol or "").strip().lstrip("#")
+    if len(h) != 6:
+        return None
+    try:
+        return tuple(int(h[i:i + 2], 16) / 255.0 for i in (0, 2, 4))
+    except ValueError:
+        return None
+
+
+def dusky_theme(path=None):
+    """Auto colour: Dusky's pywal palette (~/.cache/wal/colors.json, rewritten
+    every time the theme/wallpaper changes) -> (cool, warm) aura tints.
+    Issue dusklinux/dusky#343 asks for themeable cursor colours; matching the
+    UI theme automatically IS that feature for the soul. Falls back to the
+    moonlight blue when wal is missing/blank. Dark entries are normalised to
+    full brightness so they keep their hue as a glow."""
+    try:
+        import json
+        with open(path or os.path.expanduser("~/.cache/wal/colors.json")) as f:
+            cs = json.load(f).get("colors", {})
+    except (OSError, ValueError):
+        return None
+
+    def pick(*keys):
+        for k in keys:
+            rgb = _wal_rgb(cs.get(k))
+            if rgb and max(rgb) > 0.15:      # skip black-ish slots
+                m = max(rgb)
+                return tuple(min(c / m, 1.0) for c in rgb)
+        return None
+    cool = pick("color12", "color4", "color3", "color10", "color5", "color13")
+    warm = pick("color11", "color6", "color14", "color13", "color15", "color10")
+    if not cool and not warm:
+        return None
+    return (cool or (0.42, 0.62, 1.00), warm or (1.00, 0.72, 0.38))
 
 
 def hypr_sockets():
@@ -94,10 +138,12 @@ class Aura:
 
     SCALE = 2
 
-    def __init__(self, canvas, radius, strength, warp_seed, grow=1.6, ascale=0.55):
+    def __init__(self, canvas, radius, strength, warp_seed, grow=1.6, ascale=0.55,
+                 tints=None):
         self.C, self.R0, self.strength = canvas, radius, strength
         self.grow, self.ascale = grow, ascale
         self.seed = warp_seed
+        self.tints = tints  # None -> moonlight default; set live from wal
         F = canvas // self.SCALE
         self.F = F
         c = np.arange(F, dtype=np.float32)
@@ -171,8 +217,9 @@ class Aura:
                     math.hypot(tx, ty) / 40.0, 1.0)
         a = np.clip(glow * self.ascale, 0.0, 1.0)
         tint = np.clip(wob * 0.6 + speed * 0.55 + energy * 0.35, 0.0, 1.0)[..., None]
-        cool = np.array((0.42, 0.62, 1.00), np.float32)
-        warm = np.array((1.00, 0.72, 0.38), np.float32)
+        cool_, warm_ = self.tints or ((0.42, 0.62, 1.00), (1.00, 0.72, 0.38))
+        cool = np.array(cool_, np.float32)
+        warm = np.array(warm_, np.float32)
         rgb = cool + (warm - cool) * tint
         if core_w is not None:
             rgb = rgb + (1.0 - rgb) * np.clip(core_w * 3.0, 0.0, 1.0)[..., None]
@@ -283,7 +330,40 @@ def main():
                     cfg_cache[0] = json.load(f).get("soul") or {}
             except (OSError, ValueError):
                 pass
+            t = dusky_theme()
+            if t:
+                aura.tints = t
         return cfg_cache[0]
+
+    # arrow control was the old sprite daemon's last job — soul owns it now.
+    # Only touch hyprctl when the state actually flips (setcursor is a
+    # compositor-wide op).
+    arrow_st = [None]
+    def apply_arrow(ac):
+        want = bool(ac.get("hide_arrow")) and bool(ac.get("on", True))
+        if want == arrow_st[0]:
+            return
+        arrow_st[0] = want
+        try:
+            if want:
+                set_cursor_theme("Invisible", 24)
+            else:
+                set_cursor_theme(os.environ.get("XCURSOR_THEME", "Dusky"),
+                                 int(os.environ.get("XCURSOR_SIZE", 18)))
+        except Exception:
+            pass
+
+    def _restore_arrow():
+        try:
+            set_cursor_theme(os.environ.get("XCURSOR_THEME", "Dusky"),
+                             int(os.environ.get("XCURSOR_SIZE", 18)))
+        except Exception:
+            pass
+    import atexit
+    atexit.register(_restore_arrow)
+    import signal
+    signal.signal(signal.SIGTERM, lambda *_: sys.exit(0))  # atexit runs
+
     aura = Aura(C, args.radius, args.strength, args.hue_seed,
                 grow=args.grow, ascale=args.glow)
     F = aura.F
@@ -332,6 +412,7 @@ def main():
     def tick():
         now = time.monotonic()
         ac = cfg()
+        apply_arrow(ac)
         if not ac.get("on", True):
             if win.get_visible():
                 win.hide()

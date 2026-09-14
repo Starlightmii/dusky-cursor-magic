@@ -1,1 +1,0 @@
-Procedural renderer in scripts/render3d_planet_rune.py, no third-party assets, MIT (project license)

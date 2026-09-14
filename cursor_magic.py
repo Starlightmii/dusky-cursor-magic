@@ -11,7 +11,8 @@ gi.require_version("GdkPixbuf", "2.0"); gi.require_version("GtkLayerShell", "0.1
 from gi.repository import Gtk, Gdk, GdkPixbuf, GtkLayerShell, GLib
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from magic_core import (WiggleDetector, AuraMachine, StarField, SpeedEstimator,
-                        frame_index, load_packs, decode_frames, load_config)
+                        frame_index, load_packs, decode_frames, load_config,
+                        playback_boost)
 
 PACK_DIRS = [os.path.expanduser("~/.config/dusky/cursor-magic/packs"),
              os.path.join(os.path.dirname(os.path.abspath(__file__)), "packs")]
@@ -57,6 +58,7 @@ class Daemon:
         self._last_alive = time.perf_counter()           # U8: idle shimmer clock
         self._demo_t = 0.0 if demo else None
         self.pixbufs, self.durations, self.total, self.pack_t0 = [], [], 0.0, 0.0
+        self._anim_t = 0.0               # Cycle-3: motion-boosted sprite clock
         self.sprite_on = False
         self.click_fx = []            # (t0, big)  -> ripple + star pop
         self.trail = []               # (t, x, y)  fading comet behind aura
@@ -130,6 +132,7 @@ class Daemon:
             f.width, f.height, f.width * 4) for f in frames]
         self.durations, self.total = durs, float(sum(durs))
         self.pack_t0 = time.monotonic()
+        self._anim_t = 0.0               # Cycle-3: restart sprite clock
 
     def show_emotion(self, name, pack_name=None):
         for pname, pack in self.all_emotions().items():
@@ -153,6 +156,7 @@ class Daemon:
                     self.durations = [1.0 / fps] * len(pb)
                     self.total = len(pb) / fps
                     self.pack_t0 = time.monotonic()
+                    self._anim_t = 0.0               # Cycle-3: restart clock
                     return True
                 frames, dur = decode_frames(spec["path"])   # gif OR single png
                 if frames:
@@ -302,6 +306,17 @@ class Daemon:
                 pr["moved"] = max(pr["moved"],
                                   math.hypot(pos[0] - pr["x"], pos[1] - pr["y"]))
             self.aura.update(now, self.wig.heat, amb)
+            # Cycle-3: alive playback — advance seq frames by boost*dt so
+            # turntables spin up to 2x during fast motion, settling to base
+            # at rest. Accumulate; never scale wall-clock (default 1.0 = no-op).
+            pb = self.cfg.get("playback", {})
+            boost = 1.0
+            if not self._reduced and pb.get("on", True) and self.total:
+                boost = playback_boost(self.aura.energy, sp,
+                                       base=pb.get("base", 1.0),
+                                       cap=pb.get("cap", 2.5))
+            if self.total:
+                self._anim_t = getattr(self, "_anim_t", 0.0) + dt * boost
             # U4: smoothed glow center — dt-correct 35ms follower kills the
             # flick strobe; raw pos stays the anchor for clicks/star bursts
             a4 = 1.0 - math.exp(-dt / 0.035)
@@ -471,13 +486,16 @@ class Daemon:
 
     def _draw_sprite(self, cr, cx, cy, C, m, a):
         sp = self.cfg.get("sprite", {})
-        now = time.monotonic()
-        t = now - self.pack_t0
+        # Cycle-3: sprite time = motion-boosted accumulated time (energy- and
+        # speed-scaled playback), not wall-clock; frame-delta decode math
+        # (test_packs) is untouched — only the time source changed.
+        t = getattr(self, "_anim_t", 0.0)
         if self.total:
             t = t % self.total if sp.get("frame_loop", True) \
                 else min(t, self.total - 1e-3)   # one-shot: hold last frame
         pb = self.pixbufs[frame_index(self.durations, t)
                           if self.durations else 0]
+        now = time.monotonic()
         pw, ph = pb.get_width(), pb.get_height()
         size = C * 0.35 * m.scale * sp.get("size", 1.0)
         e = m.energy

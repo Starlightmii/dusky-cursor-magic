@@ -56,6 +56,11 @@
   "bloom_alpha": 0.12
  },
  "sparkles": 8,
+ "playback": {
+  "on": true,
+  "base": 1.0,
+  "cap": 2.5
+ },
  "tick_ms": 8,
  "blur_layerrule": true,
  "pack_dir": "~/.config/dusky/cursor-magic/packs",

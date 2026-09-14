@@ -200,6 +200,17 @@ class StarField:
         return len(self._stars)
 
 
+def playback_boost(energy, speed, base=1.0, cap=2.5, k=0.3, v_max=4000.0):
+    """Cycle-3: seq-pack playback rate multiplier from live motion state.
+    energy: aura energy [0,1] (melt-tailed), speed: cursor px/s, base: the
+    configured no-op rate (default 1.0), cap: absolute clamp (1.0-2.5 per
+    brief). Returns multiplier in [1.0, cap]: pure function of the inputs,
+    frame-rate independent, and exactly base when energy and speed are 0."""
+    e_term = min(1.0, max(0.0, energy)) * k
+    v_term = min(1.0, max(0.0, speed / v_max)) * (cap - 1.0 - k)
+    return min(cap, base + e_term + v_term)
+
+
 def frame_index(durations, t):
     """Index of the frame at elapsed time t inside a looping animation.
     Wraps forever: frame = durations[:n] played back-to-back, t % total."""

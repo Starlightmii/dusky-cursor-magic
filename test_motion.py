@@ -43,9 +43,23 @@ def t_reduced_motion():
     assert a.scale == 1.0, "reduced-motion must pin scale"
 
 
+def t_c3_playback_scales():
+    """Cycle-3: playback rate rises with energy+speed, clamps at cap,
+    is exactly base at rest (default no-op), and reduced-motion never boosts."""
+    from magic_core import playback_boost
+    rest = playback_boost(0.0, 0.0)
+    assert abs(rest - 1.0) < 1e-9, rest            # no-op at rest
+    fast = playback_boost(1.0, 4000.0)
+    mid = playback_boost(0.5, 2000.0)
+    assert rest < mid < fast, (rest, mid, fast)   # monotone in both terms
+    assert fast <= 2.5, fast                      # clamp per brief
+    assert playback_boost(10.0, 99999.0) == 2.5  # clamps hard on garbage
+    assert playback_boost(0.3, 500.0, base=1.5) > 1.5   # base configures floor
+
+
 if __name__ == "__main__":
     for fn in (t_u1_energy_melts, t_u3_spring_band, t_u2_burst_scales,
-               t_reduced_motion):
+               t_reduced_motion, t_c3_playback_scales):
         fn()
         print("ok", fn.__name__)
     print("MOTION OK")

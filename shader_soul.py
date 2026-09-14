@@ -107,14 +107,18 @@ class Aura:
         self.nx = self.gx * 0.028
         self.ny = self.gy * 0.028
 
-    def render(self, t, speed, energy, ripples, out, core=False, hot=(0.0, 0.0)):
+    def render(self, t, speed, energy, ripples, out, core=False,
+               hot=(0.0, 0.0), vel=(0.0, 0.0)):
         """Fill ARGB32 numpy `out` (F x F view) with the current aura frame.
         hot = pointer offset from canvas centre in canvas px (non-zero at
         screen edges where the layer window clamps). Ripples carry
-        (gx,gy,age,strength); core=True paints the orb AT the pointer."""
+        (gx,gy,age,strength); core=True paints the orb AT the pointer.
+        vel = smoothed pointer velocity (canvas px/frame): the orb squashes
+        along its motion like hypr-dynamic-cursors tilts the sprite."""
         R = self.R0 * (1.0 + self.grow * speed) * self.strength
-        r = (self.r if hot == (0.0, 0.0) else
-             np.hypot(self.gx - hot[0], self.gy - hot[1]))
+        rx = self.gx - hot[0]
+        ry = self.gy - hot[1]
+        r = (self.r if hot == (0.0, 0.0) else np.hypot(rx, ry))
         # organic warp
         wob = fbm(self.nx + self.seed, self.ny + t * 0.18
                   + fbm(self.nx * 0.5 - t * 0.06, self.ny * 0.5, 2) * 0.9, 3)
@@ -141,7 +145,17 @@ class Aura:
             # arrow hidden -> we ARE the cursor: opaque white-hot core (blue
             # halo from the ring carries the fantasy tint), reads on any page
             cr_ = self.R0 * 0.24 * (1.0 + 0.12 * math.sin(t * 2.6))
-            core_w = np.exp(-((r / cr_) ** 2))
+            vmag = min(math.hypot(vel[0], vel[1]) * 0.05, 1.0)
+            if vmag > 0.02:
+                # hypr-dynamic-cursors feel: squash along motion, bulge across
+                ux, uy = vel[0], vel[1]
+                un = math.hypot(ux, uy) or 1.0
+                ux, uy = ux / un, uy / un
+                along = (rx * ux + ry * uy) / (cr_ * (1.0 + 0.5 * vmag))
+                perp = (rx * uy - ry * ux) / (cr_ * (1.0 - 0.28 * vmag))
+                core_w = np.exp(-(along * along + perp * perp))
+            else:
+                core_w = np.exp(-((r / cr_) ** 2))
             glow += core_w * 2.2
         else:
             # soft hole so the real cursor sprite stays crisp at the centre
@@ -268,8 +282,9 @@ def main():
     buf = np.zeros((F, F), np.uint32)
     speed = [0.0]
     energy = [0.0]
+    vel = [(0.0, 0.0)]                # smoothed per-frame pointer delta
     ripples = []                     # canvas-local (x-off, y-off, t0, s)
-    last = [None]
+    last = [None, None, None, 0.0]   # [pos, idle-pos, idle-hot, last-render]
     evsock = [None]
     start = time.monotonic()
     screen = [1920, 1080]
@@ -325,6 +340,9 @@ def main():
             # macOS feel: grow fast, shrink slow (asymmetric easing)
             a = 0.30 if inst > speed[0] else 0.055
             speed[0] += (inst - speed[0]) * a
+            va = 0.35 if math.hypot(*vel[0]) > math.hypot(dx, dy) else 0.18
+            vel[0] = (vel[0][0] + (dx - vel[0][0]) * va,
+                      vel[0][1] + (dy - vel[0][1]) * va)
         last[0] = (x, y)
         ml = min(max(x - C // 2, 0), screen[0] - C)
         mt = min(max(y - C // 2, 0), screen[1] - C)
@@ -336,13 +354,21 @@ def main():
         energy[0] *= 0.90
         live = [(rx, ry, now - t0, s) for (rx, ry, t0, s) in ripples
                 if now - t0 < RIPPLE_LIFE]
+        # idle budget: pointer still + nothing decaying -> 30fps is plenty
+        # (the 2.6rad/s breath samples fine at half rate; 2x less CPU)
+        moved = last[1] != (x, y) or hot != last[2]
+        active = moved or speed[0] > 0.01 or energy[0] > 0.02 or live
+        if not active and now - last[3] < 1.0 / 30.0:
+            return True
+        last[3] = now
+        last[1], last[2] = (x, y), hot
         # live knobs from studio sliders
         aura.grow = float(ac.get("grow", args.grow))
         aura.ascale = float(ac.get("glow", args.glow))
         aura.R0 = float(ac.get("radius", args.radius))
         aura.strength = float(ac.get("strength", args.strength))
         aura.render(now - start, speed[0], energy[0], live, buf,
-                    core=bool(ac.get("hide_arrow")), hot=hot)
+                    core=bool(ac.get("hide_arrow")), hot=hot, vel=vel[0])
         surf_box[0] = cairo.ImageSurface.create_for_data(
             buf.view(np.uint8), cairo.FORMAT_ARGB32, F, F)
         area.queue_draw()

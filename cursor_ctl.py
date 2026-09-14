@@ -77,10 +77,14 @@ def thumb_path(spec):
     if t == "seq":
         files = _seq_files(spec)
         if files: return os.path.join(p, files[0])   # f00.png
-def load_sprite(st, name):
+def load_sprite(st, name, pack=None):
+    """pack: limit lookup to one pack — mirrors daemon show_emotion(emotion,
+    sprite_pack). Same label can exist in several packs (moon: png vs seq)."""
     st.pixbufs, st.sprite_on, st.total = [], False, 0.0
-    for pack in all_emotions().values():
-        spec = pack["emotions"].get(name or "")
+    merged = all_emotions()
+    for pname, p in merged.items():
+        if pack and pname != pack: continue
+        spec = p["emotions"].get(name or "")
         if not spec: continue
         t = spec.get("type")
         if t in ("gif", "png") and os.path.isfile(spec.get("path", "")):
@@ -220,7 +224,7 @@ class Studio(Gtk.Window):
         body.pack_start(self._sprite_card(), False, False, 0)
         body.pack_start(self._preview_card(), False, False, 0)
         self._refresh_packs()
-        load_sprite(self.st, self.cfg.get("emotion"))
+        load_sprite(self.st, self.cfg.get("emotion"), self.cfg.get("sprite_pack"))
         self.connect("destroy", self._quit)
         self._src = GLib.timeout_add(16, self._tick)     # 60fps preview
         GLib.timeout_add(750, self._poll)                # /proc status dot
@@ -329,7 +333,7 @@ class Studio(Gtk.Window):
         self._poll()
     def _apply(self):
         self.cfg = load_config(CFG_PATH)
-        self.st = new_state(self.cfg); load_sprite(self.st, self.cfg.get("emotion"))
+        self.st = new_state(self.cfg); load_sprite(self.st, self.cfg.get("emotion"), self.cfg.get("sprite_pack"))
     def _profile(self, btn, name):
         if btn.get_active():
             write_cfg(motion={"profile": name}); self._apply()
@@ -347,9 +351,10 @@ class Studio(Gtk.Window):
         for pname, pack in sorted(all_emotions().items()):
             for emo, spec in sorted(pack.get("emotions", {}).items()):
                 img = Gtk.Image(); pb = None
-                if spec.get("type") in ("gif", "png") and os.path.isfile(spec.get("path", "")):
+                tp = thumb_path(spec)
+                if tp:
                     try:
-                        pb = GdkPixbuf.Pixbuf.new_from_file(spec["path"]).scale_simple(
+                        pb = GdkPixbuf.Pixbuf.new_from_file(tp).scale_simple(
                             48, 48, GdkPixbuf.InterpType.BILINEAR)
                     except Exception: pb = None
                 if pb: img.set_from_pixbuf(pb)
@@ -367,7 +372,11 @@ class Studio(Gtk.Window):
         if row:
             emo, pname = self.rows[row.get_index()]
             write_cfg(emotion=emo, sprite_pack=pname)
-            load_sprite(self.st, emo)
+            load_sprite(self.st, emo, pname)
+    def _error(self, msg):
+        d = Gtk.MessageDialog(transient_for=self, modal=True, text=msg,
+                              buttons=Gtk.ButtonsType.OK, message_type=Gtk.MessageType.ERROR)
+        d.run(); d.destroy()
     def _import(self, _b):
         fc = Gtk.FileChooserDialog(title="Import a sprite", transient_for=self,
                                    action=Gtk.FileChooserAction.OPEN)
@@ -376,20 +385,24 @@ class Studio(Gtk.Window):
             f = Gtk.FileFilter(); f.add_pattern(pat); f.set_name(pat); fc.add_filter(f)
         src = fc.get_filename() if fc.run() == Gtk.ResponseType.OK else None
         fc.destroy()
-        src = src or ""
         ext = os.path.splitext(src or "")[1].lower().lstrip(".")
-        if ext not in ("gif", "png"): return
+        if not src or ext not in ("gif", "png"): return
+        try:                                              # fail loud, not silent
+            GdkPixbuf.Pixbuf.new_from_file(src)
+        except Exception as e:
+            self._error(f"Cannot read {os.path.basename(src)}: {e}"); return
         stem = os.path.splitext(os.path.basename(src))[0]
-        d = os.path.join(USER_PACKS, "imported")
-        dst = os.path.join(d, stem, os.path.basename(src))
-        os.makedirs(os.path.dirname(dst), exist_ok=True)
-        if os.path.abspath(src) != os.path.abspath(dst): shutil.copy2(src, dst)
-        mf = os.path.join(d, "manifest.json")
-        m = user_cfg(mf); m.setdefault("emotions", {})[stem] = \
-            {"type": ext, "path": f"{stem}/{os.path.basename(src)}"}
-        tmp = mf + ".tmp"
-        with open(tmp, "w") as f: json.dump(m, f, indent=1)
-        os.replace(tmp, mf)
+        for d in (os.path.join(REPO_PACKS, "imported"),     # repo copy + daemon mirror
+                  os.path.join(USER_PACKS, "imported")):
+            dst = os.path.join(d, stem, os.path.basename(src))
+            os.makedirs(os.path.dirname(dst), exist_ok=True)
+            if os.path.abspath(src) != os.path.abspath(dst): shutil.copy2(src, dst)
+            mf = os.path.join(d, "manifest.json")
+            m = user_cfg(mf); m.setdefault("emotions", {})[stem] = \
+                {"type": ext, "path": f"{stem}/{os.path.basename(src)}"}
+            tmp = mf + ".tmp"
+            with open(tmp, "w") as f: json.dump(m, f, indent=1)
+            os.replace(tmp, mf)
         self._refresh_packs()
     def _quit(self, *_):
         if self._src: GLib.source_remove(self._src)
@@ -410,6 +423,18 @@ def selftest():
     assert st.aura.scale > st.aura.start + 0.5, f"aura flat: {st.aura.scale}"
     assert st.stars.count > 0, "no star burst"
     print(f"OK wiggle heat={st.wig.heat:.2f} aura={st.aura.scale:.2f} stars={st.stars.count}")
+    for emo, p in (("sigil", "sigil3d"), ("moon", "moon3d")):  # seq packs, pack-scoped
+        load_sprite(st, emo, p)
+        assert len(st.pixbufs) > 10 and st.total > 0, f"seq {p}/{emo} failed"
+        spec = merged[p]["emotions"][emo]
+        tp = thumb_path(spec)
+        assert tp and os.path.isfile(tp), f"{emo} thumb"
+    print("OK seq sprites + thumbnails (sigil, moon)")
+    st.shake = [(40.0 if i % 2 else 220.0, 110.0 + 40.0 * math.sin(i * 2.1))
+                for i in range(32)]                       # test-shake queue drains 1/tick
+    while st.shake: tick_state(st, time.perf_counter(), st.shake.pop(0))
+    assert st.wig.heat > 0.1, "test shake made no heat"
+    print("OK test shake")
     surf = cairo.ImageSurface(cairo.FORMAT_ARGB32, 260, 260)
     paint(cairo.Context(surf), st)
     surf.write_to_png("/tmp/ctl_selftest.png")

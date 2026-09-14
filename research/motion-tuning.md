@@ -68,4 +68,32 @@ U2 burst scaling, reduced-motion pin) + `test_magic_core.py` + lifecycle
 `scripts/selfcheck.sh`. Notes: `need` kwarg on WiggleDetector is a deprecated
 no-op kept for `**cfg["wiggle"]` compatibility — do not delete.
 Idle-shimmer/sprite-squash candidates above are now shipped (U8, aura
-squash-stretch in tick); remaining unbuilt: trail sparkle nodes, heat-tinted hue.
+squash-stretch in tick); remaining unbuilt: trail sparkle nodes.
+
+## Cycle-2 pass (2026-09-14, commit 3ac18cc)
+
+1. **Heat-tinted aura hue** (spec line 46 idea, applied): `Daemon._tint()` lerps
+   `glow.color → glow.warm_color` with k = 0.55·wiggle-heat + 0.45·energy —
+   calm-cool at rest, candle-warm mid-shake, full ember at a violent flick.
+   Feeds the aura gradients + `_ring` + drag wake. Verified: cold == base color,
+   hot == warm color, mid == midpoint (headless).
+2. **Drag-vs-click ripples**: `clicks.py` already emitted release events (unused);
+   `_drain_clicks` now anchors `_press{x,y}` at press, `tick` accumulates travel
+   (`_press["moved"]`), release >12 px ⇒ "wake" ripple — easeOutCubic ring,
+   700 ms, wider/softer than the click boing. Under 12 px ⇒ normal click ripple.
+   Verified headless: press→80px→release = 1 drag + 1 click; pure click adds no
+   false drag; wake inks 1487 px, click 1620 px on a real cairo surface.
+3. `click_fx` added to the surface show-gate (cold clicks with stars off now
+   still show ripples); `click_fx` entries are now `(t0, dbl, kind)` 3-tuples,
+   2-tuples from old code render as clicks. `glow.warm_color` in
+   `config.default.json` [1.0, 0.72, 0.42].
+
+All four gates green post-change: MOTION OK / ALL PASS (15) / VISUAL-PROXY OK /
+ALL PACKS OK. Daemon restarted via `scripts/restart.sh` (PID 2581187).
+Pitfall for restart.sh owner: its `pgrep -f "[c]ursor_magic.py"` self-matches a
+calling shell whose command line mentions `cursor_magic.py` (e.g. `git add
+cursor_magic.py && … && bash scripts/restart.sh`) and SIGTERMs it after the
+daemon spawns — harmless here, but the script should filter to the actual
+`/usr/bin/python3 cursor_magic.py` process (e.g. `pgrep -f '^/usr/bin/python3
+`/usr/bin/python3 cursor_magic\.py$'`). Heat-tinted hue (idea above) shipped
+in this cycle-2 section.

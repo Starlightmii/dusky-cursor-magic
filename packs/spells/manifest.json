@@ -13,6 +13,12 @@
    "path": "firebrand/",
    "frames": 35,
    "fps": 15
+  },
+  "fireball": {
+   "type": "seq",
+   "path": "fireball/",
+   "frames": 39,
+   "fps": 14
   }
  }
 }

@@ -14,7 +14,7 @@ from magic_core import WiggleDetector, AuraMachine, StarField, load_packs, decod
 CFG_PATH = os.path.expanduser("~/.config/dusky/cursor-magic/config.json")
 USER_PACKS = os.path.expanduser("~/.config/dusky/cursor-magic/packs")
 REPO_PACKS = os.path.join(HERE, "packs")
-PIDFILE = "/tmp/magic_ctl.pid"
+PIDFILE = os.path.expanduser("~/.cache/cursor-magic/magic.pid")   # same file scripts/restart.sh writes — one daemon, one truth
 PROFILES = ("macos", "snappy", "smooth", "reduced")
 SLIDERS = (("peak_scale", "motion", 1.5, 4.0, 0.05), ("gain", "wiggle", 0.1, 1.0, 0.01),
            ("arm_heat", "wiggle", 0.2, 0.95, 0.01), ("tau_s", "wiggle", 0.1, 1.5, 0.01),
@@ -249,6 +249,10 @@ class Studio(Gtk.Window):
         self.toggle.connect("clicked", self._on_toggle)
         box.pack_start(self.dot, False, False, 0)
         box.pack_start(self.toggle, False, False, 0)
+        rb = Gtk.Button(label="↻ Restart")
+        rb.set_tooltip_text("Reload daemon code (config hot-reloads on save)")
+        rb.connect("clicked", self._on_restart)
+        box.pack_start(rb, False, False, 0)
         box.pack_start(cls(Gtk.Label(label="shake the preview — the aura is alive ✧"), "hint"), True, True, 0)
         return box
     def _motion_card(self):
@@ -325,16 +329,32 @@ class Studio(Gtk.Window):
         return True
     def _on_toggle(self, _b):
         if pid_alive():                                   # OFF: kill our pidfile only
-            with open(PIDFILE) as f: os.kill(int(f.read().strip()), signal.SIGTERM)
-            os.remove(PIDFILE); write_cfg(disabled=True)
+            self._kill_daemon(); write_cfg(disabled=True)
         else:                                             # ON: enable + launch detached
-            write_cfg(disabled=False)
-            log = open("/tmp/magic_ctl.log", "ab")
-            p = subprocess.Popen(["setsid", "/usr/bin/python3",
-                                  os.path.join(HERE, "cursor_magic.py")],
-                                 stdout=log, stderr=log)
-            with open(PIDFILE, "w") as f: f.write(str(p.pid))
+            write_cfg(disabled=False); self._launch_daemon()
         self._poll()
+    def _kill_daemon(self):
+        try:
+            with open(PIDFILE) as f: pid = int(f.read().strip())
+            os.kill(pid, signal.SIGTERM)
+            for _ in range(100):                          # wait for /proc entry to go
+                if not os.path.isdir(f"/proc/{pid}"): break
+                time.sleep(0.02)
+        except Exception:
+            pass
+        if os.path.exists(PIDFILE): os.remove(PIDFILE)
+    def _launch_daemon(self):
+        d = os.path.dirname(PIDFILE); os.makedirs(d, exist_ok=True)
+        log = open(os.path.join(d, "magic.log"), "ab")
+        p = subprocess.Popen(["setsid", "/usr/bin/python3",
+                              os.path.join(HERE, "cursor_magic.py")],
+                             stdout=log, stderr=log)
+        with open(PIDFILE, "w") as f: f.write(str(p.pid))
+    def _on_restart(self, _b):
+        """Reload daemon code. Config changes hot-reload on save, so this is
+        only needed after pulling new code."""
+        if pid_alive(): self._kill_daemon()
+        self._launch_daemon(); self._poll()
     def _apply(self):
         self.cfg = load_config(CFG_PATH)
         self.st = new_state(self.cfg); load_sprite(self.st, self.cfg.get("emotion"), self.cfg.get("sprite_pack"))

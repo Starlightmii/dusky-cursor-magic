@@ -385,6 +385,8 @@ def main():
                     help="how much the aura scales up at full speed")
     ap.add_argument("--glow", type=float, default=0.50,
                     help="overall brightness multiplier")
+    ap.add_argument("--renderer", choices=("cpu", "gpu"), default="gpu",
+                    help="aura field renderer (gpu = Intel iGPU GLES3; falls back to cpu)")
     args = ap.parse_args()
     C = args.canvas
 
@@ -496,8 +498,20 @@ def main():
     import signal
     signal.signal(signal.SIGTERM, lambda *_: sys.exit(0))  # atexit runs
 
-    aura = Aura(C, args.radius, args.strength, args.hue_seed,
-                grow=args.grow, ascale=args.glow)
+    def make_aura():
+        if args.renderer == "gpu":
+            try:
+                import soul_gl
+                a = soul_gl.SoulGL(C, args.radius, args.strength,
+                                   args.hue_seed, grow=args.grow,
+                                   ascale=args.glow)
+                print("aura renderer = gpu (iGPU GLES3)", flush=True)
+                return a
+            except Exception as e:            # GL init/compile: never die,
+                print(f"aura gpu failed ({e}); cpu", flush=True)   # just fall back
+        return Aura(C, args.radius, args.strength, args.hue_seed,
+                    grow=args.grow, ascale=args.glow)
+    aura = make_aura()
     F = aura.F
     buf = np.zeros((F, F), np.uint32)
     speed = [0.0]

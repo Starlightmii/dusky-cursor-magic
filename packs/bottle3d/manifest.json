@@ -1,0 +1,12 @@
+{
+  "name": "bottle3d",
+  "attribution": "WaterBottle.glb \u00a9 2017, Public \u2014 CC0 v1.0, via KhronosGroup/glTF-Sample-Assets",
+  "emotions": {
+    "bottle": {
+      "type": "seq",
+      "path": "",
+      "frames": 48,
+      "fps": 20
+    }
+  }
+}

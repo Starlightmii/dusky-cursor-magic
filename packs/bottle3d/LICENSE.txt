@@ -1,0 +1,1 @@
+WaterBottle model: © 2017, Public — CC0 v1.0 (KhronosGroup/glTF-Sample-Assets). Frames rendered by scripts/render3d_model.py.

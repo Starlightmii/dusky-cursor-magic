@@ -23,15 +23,50 @@ MAX_FACES = 8000              # ponytail: painter loop is O(faces) in python; de
 
 
 def load_single(path):
-    obj = trimesh.load(path, force="mesh")   # process=True: merges + bakes texture into vertex colors
+    obj = trimesh.load(path, force="mesh")   # process=True: merges geometry + UVs
+    obj = bake_texture(obj)                  # UV texture -> vertex colors
     if len(obj.faces) > MAX_FACES:           # keep the CPU painter loop tractable
-        obj = obj.simplify_quadric_decimation(MAX_FACES)
+        obj = decimate_keep_color(obj)
     return obj
 
 
+def decimate_keep_color(m, max_faces=MAX_FACES):
+    """Quadric decimation drops vertex colors (-> gray). Decimate geometry,
+    then recolor each new face from the nearest original face's centroid."""
+    orig = np.asarray(m.visual.vertex_colors, int)[m.faces, :3].mean(1)  # per-face RGB
+    orig_c = np.asarray(m.vertices, float)[m.faces].mean(1)
+    dm = m.simplify_quadric_decimation(face_count=max_faces)
+    new_c = np.asarray(dm.vertices, float)[dm.faces].mean(1)     # per-face centroids
+    B = 2000
+    idx = np.concatenate([((orig_c[:, None, :] - new_c[s:s + B][None, :, :]) ** 2)
+                          .sum(-1).argmin(0) for s in range(0, len(new_c), B)])
+    face_rgba = orig[idx]                                        # one RGB per new face
+    vc = np.zeros((len(dm.vertices), 4), np.uint8); vc[:, 3] = 255
+    vc[dm.faces.ravel(), :3] = np.repeat(face_rgba, 3, axis=0)   # face-major scatter
+    dm.visual = trimesh.visual.ColorVisuals(mesh=dm, vertex_colors=vc)
+    return dm
+
+
+def bake_texture(m):
+    """Sample the base-color texture at each vertex UV, replace TextureVisuals
+    with plain ColorVisuals so quadric decimation can't break it."""
+    uv = getattr(m.visual, "uv", None)
+    mat = getattr(m.visual, "material", None)
+    img = getattr(mat, "baseColorTexture", None) or getattr(mat, "image", None)
+    if uv is None or img is None:
+        return m
+    rgba = np.asarray(img.convert("RGB"))
+    h, w = rgba.shape[:2]
+    px = np.clip((uv[:, 0] * (w - 1)).round().astype(int), 0, w - 1)
+    py = np.clip(((1 - uv[:, 1]) * (h - 1)).round().astype(int), 0, h - 1)
+    cols = np.column_stack([rgba[py, px], np.full(len(uv), 255, np.uint8)])
+    m.visual = trimesh.visual.ColorVisuals(mesh=m, vertex_colors=cols)
+    return m
+
+
 def face_colors(mesh):
-    """One RGB per face from baked vertex colors (avg of 3 corners)."""
-    vc = np.asarray(mesh.visual.to_color().vertex_colors, dtype=int)
+    """One RGB per face from vertex colors (baked by load_single; avg of 3 corners)."""
+    vc = np.asarray(mesh.visual.vertex_colors, dtype=int)
     return vc[mesh.faces, :3].mean(1).astype(int)
 
 

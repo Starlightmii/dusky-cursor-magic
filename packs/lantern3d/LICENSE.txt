@@ -1,0 +1,2 @@
+Lantern model: © 2017, Microsoft — CC0 v1.0 Universal, via KhronosGroup/glTF-Sample-Assets.
+Turntable frames rendered by scripts/render3d_model.py (MIT, project license).

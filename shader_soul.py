@@ -216,11 +216,17 @@ def main():
     area.connect("draw", on_draw)
     win.show_all()
 
-    # self-register like the sprite daemon: studio reads this to toggle/kill
+    # self-register like the sprite daemon: studio reads this to toggle/kill.
+    # flock so a second spawn exits silently instead of leaking a ghost layer
     pidfile = os.path.expanduser("~/.cache/cursor-magic/soul.pid")
     os.makedirs(os.path.dirname(pidfile), exist_ok=True)
-    with open(pidfile, "w") as f:
-        f.write(str(os.getpid()))
+    import fcntl
+    _lock = open(pidfile, "w")
+    try:
+        fcntl.flock(_lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+    except OSError:
+        sys.exit(0)          # another soul owns the layer
+    _lock.write(str(os.getpid())); _lock.flush()
 
     # ---- state -------------------------------------------------------------
     CFG = os.path.expanduser("~/.config/dusky/cursor-magic/config.json")

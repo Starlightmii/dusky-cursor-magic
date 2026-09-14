@@ -635,8 +635,24 @@ def main():
     cp = a[a.index("-c") + 1] if "-c" in a else os.path.expanduser(
         "~/.config/dusky/cursor-magic/config.json")
     cfg = load_config(cp)
-    Daemon(cfg, demo=demo, cfg_path=cp)
+    d = Daemon(cfg, demo=demo, cfg_path=cp)
+
+    def _show_arrow_again(*_):
+        try:
+            d.set_cursor_theme(os.environ.get("XCURSOR_THEME", "Dusky"),
+                               int(os.environ.get("XCURSOR_SIZE", "18")))
+        except Exception:
+            pass
+
+    import atexit, signal
+    atexit.register(_show_arrow_again)
+    for _sig in (signal.SIGTERM, signal.SIGHUP):
+        try:
+            signal.signal(_sig, lambda *_: Gtk.main_quit())
+        except Exception:
+            pass
     Gtk.main()
+    _show_arrow_again()   # clean exit (or SIGTERM): never leave arrow hidden
 
 if __name__ == "__main__":
     main()

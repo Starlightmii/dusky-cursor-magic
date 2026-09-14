@@ -19,8 +19,13 @@ SS, SIDE = 4, 256
 S = SIDE * SS
 
 
+MAX_FACES = 8000              # ponytail: painter loop is O(faces) in python; decimate beyond this
+
+
 def load_single(path):
     obj = trimesh.load(path, force="mesh")   # process=True: merges + bakes texture into vertex colors
+    if len(obj.faces) > MAX_FACES:           # keep the CPU painter loop tractable
+        obj = obj.simplify_quadric_decimation(MAX_FACES)
     return obj
 
 

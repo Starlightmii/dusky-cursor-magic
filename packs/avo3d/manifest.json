@@ -1,0 +1,7 @@
+{
+  "name": "avo3d",
+  "attribution": "Avocado.glb © 2017 Public Domain, CC0 v1.0 (KhronosGroup/glTF-Sample-Assets) — turntable rendered by scripts/render3d_model.py",
+  "emotions": {
+    "avo": {"type": "seq", "path": "", "frames": 48, "fps": 20}
+  }
+}

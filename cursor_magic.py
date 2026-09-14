@@ -594,7 +594,23 @@ class Daemon:
             cr.fill()
             cr.restore()
 
+def _single_instance():
+    """Ghost-overlay guard: a second daemon (or a --demo spawn while one
+    runs) refuses to start — flock on the pidfile is the whole mechanism.
+    The winner records its own pid, so the pidfile is always the truth."""
+    import fcntl
+    pf = os.path.expanduser("~/.cache/cursor-magic/magic.pid")
+    os.makedirs(os.path.dirname(pf), exist_ok=True)
+    lk = open(pf, "a+")
+    try:
+        fcntl.flock(lk, fcntl.LOCK_EX | fcntl.LOCK_NB)
+    except BlockingIOError:
+        sys.exit(0)
+    lk.seek(0); lk.truncate(); lk.write(str(os.getpid())); lk.flush()
+    return lk
+
 def main():
+    _lock = _single_instance()
     a = sys.argv[1:]
     demo = a[a.index("--demo") + 1] if "--demo" in a and a.index("--demo") + 1 < len(a) else ("random" if "--demo" in a else None)
     cp = a[a.index("-c") + 1] if "-c" in a else os.path.expanduser(

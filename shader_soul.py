@@ -178,6 +178,13 @@ class Stars:
         if len(self._s) > self.cap:
             self._s = self._s[-self.cap:]
 
+    def supernova(self, t, x, y):
+        """Fast-sweep-then-stop blast: over-driven click burst at 1.6x
+        speed/size + a white-hot energy spike + shockwave ring (caller
+        adds the ripple with scale >1). Cooldown lives in the caller."""
+        self.burst(t, x, y, n_ring=18, n_hero=3, n_micro=8, size=1.5,
+                   speed=1.6)
+
     def _add(self, t, ang, spd, size, life, spin, tw, x, y, drift):
         self._s.append((t, ang, spd, size, life, spin, tw, (x, y), drift))
 
@@ -479,6 +486,9 @@ def main():
     buf = np.zeros((F, F), np.uint32)
     speed = [0.0]
     energy = [0.0]
+    peak = [0.0]                   # max speed since last blast (supernova arm)
+    nova_at = [-9.0]               # monotonic time of last supernova
+    nova_pt = [None]               # (now, x, y) of shockwave ring to place once hot is known
     vel = [(0.0, 0.0)]                # smoothed per-frame pointer delta
     ripples = []                     # canvas-local (x-off, y-off, t0, s)
     stars = Stars()                  # galaxy sparkles (canvas px coords)
@@ -547,6 +557,16 @@ def main():
             va = 0.35 if math.hypot(*vel[0]) > math.hypot(dx, dy) else 0.18
             vel[0] = (vel[0][0] + (dx - vel[0][0]) * va,
                       vel[0][1] + (dy - vel[0][1]) * va)
+            # SUPERNOVA: a fast sweep that slams on the brakes detonates.
+            # arm on peak>0.85, fire when speed collapses <0.35, 1.2s cooldown
+            peak[0] = max(peak[0], speed[0])
+            if (peak[0] > 0.85 and speed[0] < 0.35
+                    and now - nova_at[0] > 1.2):
+                nova_at[0] = now
+                peak[0] = 0.0
+                energy[0] = 2.2                  # white-hot flash (clip handles it)
+                stars.supernova(now - start, float(x), float(y))
+                nova_pt[0] = (now, x, y)         # shockwave ring once hot is known
         last[0] = (x, y)
         if trail[0] is None:
             trail[0] = (float(x), float(y))
@@ -559,6 +579,11 @@ def main():
         trail_hot = (trail[0][0] - ml - C / 2.0, trail[0][1] - mt - C / 2.0)
         hot_st[0], hot_st[1] = hot
         ptr[0], ptr[1] = x, y
+        if nova_pt[0]:                               # place deferred shockwave
+            (nnow, nx_, ny_) = nova_pt[0]
+            nova_pt[0] = None
+            ripples.append(((nx_ - ml - C / 2.0) / Aura.SCALE,
+                            (ny_ - mt - C / 2.0) / Aura.SCALE, nnow, 2.4))
         GtkLayerShell.set_margin(win, GtkLayerShell.Edge.LEFT, ml)
         GtkLayerShell.set_margin(win, GtkLayerShell.Edge.TOP, mt)
         poll_clicks(now)

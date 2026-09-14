@@ -27,4 +27,8 @@ assert g[0, 0] == 0.0
 # shed stays small + lazy (speed < burst speeds)
 s3 = S.Stars(); s3.shed(0.0, 5, 5)
 assert len(s3._s) == 1 and s3._s[0][2] < 120
+# supernova = bigger + faster than a normal burst
+s4 = S.Stars(); s4.supernova(0.0, 0, 0)
+assert len(s4._s) == 29, len(s4._s)             # 18+3+8
+assert max(x[2] for x in s4._s) > 450           # some stars outrun a normal burst
 print('stars: OK', len(s._s))

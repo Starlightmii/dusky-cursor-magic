@@ -19,10 +19,13 @@ PROFILES = ("macos", "snappy", "smooth", "reduced")
 SLIDERS = (("peak_scale", "motion", 1.5, 4.0, 0.05), ("gain", "wiggle", 0.1, 1.0, 0.01),
            ("arm_heat", "wiggle", 0.2, 0.95, 0.01), ("tau_s", "wiggle", 0.1, 1.5, 0.01),
            ("size", "sprite", 0.5, 2.0, 0.05),
-           ("max_gain", "ambient", 0.0, 0.8, 0.05))
+           ("max_gain", "ambient", 0.0, 0.8, 0.05),
+           ("base", "playback", 1.0, 2.0, 0.05),
+           ("cap", "playback", 1.0, 2.5, 0.05))
 CHECKS = (("sprite", "bob", "bob"), ("sprite", "spin", "spin"),
           ("aura", "trail", "trail"), ("stars", "enabled", "stars"),
-          ("ambient", "on", "whisper"), ("ambient", "idle_shimmer", "shimmer"))
+          ("ambient", "on", "whisper"), ("ambient", "idle_shimmer", "shimmer"),
+          ("playback", "on", "alive spin"))
 KEY_DEFAULTS = {"size": 1.0, "bob": True, "spin": True, "trail": True,
                 "enabled": True, "on": True, "idle_shimmer": True,
                 "max_gain": 0.35}

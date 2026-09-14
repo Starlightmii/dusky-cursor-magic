@@ -18,10 +18,10 @@ PACK = os.path.normpath(os.path.join(HERE, "..", "packs", "sigil3d"))
 FRAMES_DIR = os.path.join(PACK, "frames")
 
 OUT = 128            # final sprite size
-SS = 3               # supersample (384 render -> LANCZOS -> 128): no jaggies
+SS = 4               # supersample (512 render -> LANCZOS -> 128): no jaggies
 CANVAS = OUT * SS
 N_FRAMES = 24
-FOCAL, CAM_Z, PPU = 5.0, 9.0, 135.0       # persp strength, camera z, px/unit
+FOCAL, CAM_Z, PPU = 5.0, 9.0, 240.0       # persp strength, camera z, px/unit
 TILT = -0.16                              # fixed x-tilt: shows top bevel, 3/4 view
 R_OUT, R_IN, HZ = 1.0, 0.30, 0.12         # star outer/inner radius, half-thick
 GEM = (0.22, 0.22, HZ + 0.001)            # chibi highlight diamond, off-axis

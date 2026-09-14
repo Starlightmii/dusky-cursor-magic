@@ -44,3 +44,28 @@ All in `cursor_magic.py`, zero new config keys, all draw-path only:
 - Idle shimmer: config `idle_shimmer` bool; keep surface mapped at low alpha
   with a 4s breath sine. Cost: surface always mapped (battery).
 - Heat-tinted aura hue: lerp glow color toward warm at high heat.
+
+## Applied 2026-09-14 pass (U1–U8, in commit 2718582)
+
+Token-router's numbered spec, applied to `magic_core.py` + `cursor_magic.py`
+(U2/U3/U6 partly earlier by coordinator — lanes merged). Measured on
+`AuraMachine` @240Hz, default macos profile: **enter t95 = 246 ms,
+exit t95 = 233 ms, overshoot = 0.1%** (KWin reference band ~200 ms, was 320 ms).
+
+| ID | Change | Where | Params |
+|----|--------|-------|--------|
+| U1 | Leaky-peak energy — melts with aura instead of pinning at last shake | `AuraMachine.update/energy` | e-fold τ=0.35 s; zeroed on settle |
+| U2 | Energy-scaled star bursts (size + speed) | `StarField.burst(size=)` | `size=0.6+0.8*heat` from wiggle heat |
+| U3 | Spring retune + asymmetric melt | `SPRINGS["macos"]`, `update()` | k=260, ζ=0.88; exit k×1.6, ζ+0.12 |
+| U4 | Smoothed glow center (35 ms follower) | `cursor_magic` `_sm` | dt-correct lerp, kills raw-pos jitter |
+| U5 | Ambient whisper via SpeedEstimator | `aura.update(t, heat, amb)` | config `ambient{min_speed 150, range 900, max_gain 0.35}` |
+| U6 | EaseOutBack click ripple | `cursor_magic` ripples | 450 ms, back-ease "boing" |
+| U7 | Speed-reactive tapered comet trail | `cursor_magic` trail | 0.35 s window, 350 ms taper, width=f(speed) |
+| U8 | Idle shimmer — 3 orbiting stars at rest | `cursor_magic._shimmer` | `idle_shimmer: true`, clock `_last_alive` |
+
+Regression gates: `test_motion.py` (U1 melt <0.35 after 2.7 s calm, U3 k≥220,
+U2 burst scaling, reduced-motion pin) + `test_magic_core.py` + lifecycle
+`scripts/selfcheck.sh`. Notes: `need` kwarg on WiggleDetector is a deprecated
+no-op kept for `**cfg["wiggle"]` compatibility — do not delete.
+Idle-shimmer/sprite-squash candidates above are now shipped (U8, aura
+squash-stretch in tick); remaining unbuilt: trail sparkle nodes, heat-tinted hue.

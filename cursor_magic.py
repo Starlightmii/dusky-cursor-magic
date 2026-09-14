@@ -234,13 +234,21 @@ class Daemon:
             self._hide_arrow = hide
             inv = os.path.expanduser("~/.local/share/icons/Invisible/cursors")
             if hide and os.path.isdir(inv):
-                self.hypr("hyprctl dispatch setcursor Invisible 24")
+                self.set_cursor_theme("Invisible", 24)
             elif not hide:
-                self.hypr("hyprctl dispatch setcursor %s %s" % (
-                    os.environ.get("XCURSOR_THEME", "Dusky"),
-                    os.environ.get("XCURSOR_SIZE", "18")))
+                self.set_cursor_theme(os.environ.get("XCURSOR_THEME", "Dusky"),
+                                      int(os.environ.get("XCURSOR_SIZE", "18")))
         if self.disabled and self.win.get_visible():
             self.win.hide()
+
+    def set_cursor_theme(self, theme, size):
+        """hyprctl CLI is the only working path on this fork: the socket
+        [bash]/[dispatch] prefixes answer 'unknown request'."""
+        try:
+            subprocess.run(["hyprctl", "setcursor", str(theme), str(size)],
+                           capture_output=True, timeout=5)
+        except Exception:
+            pass
 
     def tick(self):
         now = time.perf_counter()

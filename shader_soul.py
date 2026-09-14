@@ -194,13 +194,19 @@ def main():
     GtkLayerShell.set_layer(win, GtkLayerShell.Layer.OVERLAY)
     GtkLayerShell.set_anchor(win, GtkLayerShell.Edge.LEFT, True)
     GtkLayerShell.set_anchor(win, GtkLayerShell.Edge.TOP, True)
+    GtkLayerShell.set_exclusive_zone(win, -1)
+    GtkLayerShell.set_keyboard_mode(win, GtkLayerShell.KeyboardMode.NONE)
     win.set_size_request(C, C)
     win.set_app_paintable(True)
     win.set_decorated(False)
-    try:
-        win.set_input_shape(cairo.Region())         # click-through
-    except Exception:
-        pass
+    # click-through: Gtk.set_input_shape is a NO-OP on Wayland — the daemon's
+    # proven path is the raw gdk window, re-applied on realize AND map
+    # (this window sits under the cursor 24/7; if hit-testing ever reverts
+    # to full-window it swallows every click — the "not clicking" bug).
+    def _pt(w):
+        w.get_window().input_shape_combine_region(cairo.Region(), 0, 0)
+    win.connect("realize", _pt)
+    win.connect("map", _pt)
     area = Gtk.DrawingArea()
     area.set_size_request(C, C)
     win.add(area)

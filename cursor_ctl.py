@@ -33,7 +33,7 @@ CHECKS = (("sprite", "bob", "bob"), ("sprite", "spin", "spin"),
           ("soul", "on", "shader soul"))
 KEY_DEFAULTS = {"size": 1.0, "bob": True, "spin": True, "trail": True,
                 "enabled": True, "on": True, "idle_shimmer": True,
-                "max_gain": 0.35}
+                "max_gain": 0.78}
 def user_cfg(path=CFG_PATH):
     try:
         with open(path) as f: return json.load(f)

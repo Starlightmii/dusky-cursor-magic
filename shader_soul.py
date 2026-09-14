@@ -221,11 +221,12 @@ def main():
     pidfile = os.path.expanduser("~/.cache/cursor-magic/soul.pid")
     os.makedirs(os.path.dirname(pidfile), exist_ok=True)
     import fcntl
-    _lock = open(pidfile, "w")
-    try:
+    _lock = open(pidfile, "a+")        # NO truncate: a refused spawn must not
+    try:                               # clobber the live soul's pidfile
         fcntl.flock(_lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
     except OSError:
         sys.exit(0)          # another soul owns the layer
+    _lock.truncate(0); _lock.seek(0)
     _lock.write(str(os.getpid())); _lock.flush()
 
     # ---- state -------------------------------------------------------------

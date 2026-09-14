@@ -86,6 +86,22 @@ def test_aura_scales_between():
     for i in range(40): a.update(0.4 + i * 0.008, 1.0)    # then wild
     assert calm > 0.5 and a.scale > calm + 0.4            # proportional
 
+def test_energy_decays_when_calm():
+    a = AuraMachine(); a.update(0.0, 0.0)
+    for i in range(60): a.update(i * 0.008, 1.0)          # fully grown
+    assert a.energy > 0.9
+    for i in range(120): a.update(0.5 + i * 0.008, 0.0)   # calm: energy melts
+    assert a.energy < 0.1                                  # U1: no stale-hot melt
+
+def test_exit_faster_than_enter():
+    a = AuraMachine(); a.update(0.0, 0.0)
+    for i in range(80): a.update(i * 0.008, 1.0)          # grow
+    grown = a.scale
+    n = 0
+    while a.scale > grown * 0.37 and n < 200:              # melt 63% of the span
+        n += 1; a.update(0.7 + n * 0.008, 0.0)
+    assert n * 0.008 < 0.20                                # U3: exit < enter (~0.26s)
+
 def test_reduced_motion_no_scale_change():
     a = AuraMachine(profile="reduced"); a.update(0.0, 0.0)
     for i in range(60): a.update(i * 0.008, 1.0)

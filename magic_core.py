@@ -38,10 +38,11 @@ class WiggleDetector:
     """Heat signal, not a switch. Each velocity reversal >= min_speed
     deposits gain * min(1, speed/reversal_speed) into .heat; heat decays
     exponentially (tau_s). .fired pulses once per burst past arm_heat."""
-    def __init__(self, window_s=0.35, min_speed=900.0, need=2,
+    def __init__(self, window_s=0.35, min_speed=900.0, need=None,
                  tau_s=0.42, gain=0.45, reversal_speed=4000.0, arm_heat=0.55):
         # tau 0.42 ≈ kwin's 2s hold: heat visibly sustains ~1.5s after last shake
-        self.window_s, self.min_speed, self.need = window_s, min_speed, need
+        # `need` is a deprecated no-op kept so old configs (**cfg["wiggle"]) still load
+        self.window_s, self.min_speed = window_s, min_speed
         self.tau_s, self.gain, self.rs = tau_s, gain, reversal_speed
         self.arm_heat = arm_heat
         self.heat = 0.0
@@ -89,7 +90,9 @@ class AuraMachine:
         # kwin shakecursor (the only faithful macOS clone in source): 3x mag,
         # 2s hold before deflate. Spring equivalents below (continuous heat
         # replaces kwin's discrete +1x re-magnify, so no separate boost needed).
-        "macos":   {"peak": 3.0, "start": 0.35, "k": 180.0, "zeta": 0.9},
+        # U3: k 240->260, z 0.9->0.88 — measured t95 ~250ms, KWin's 200ms band;
+        # melt gets the 1.6x/+.12 exit boost in update()
+        "macos":   {"peak": 3.0, "start": 0.35, "k": 260.0, "zeta": 0.88},
         "smooth":  {"peak": 2.6, "start": 0.4,  "k": 90.0,  "zeta": 1.0},
         "snappy":  {"peak": 3.2, "start": 0.3,  "k": 300.0, "zeta": 0.85},
         "reduced": {"peak": 1.0, "start": 1.0,  "k": 120.0, "zeta": 1.0},
@@ -114,24 +117,34 @@ class AuraMachine:
         self._settled_at = None
         self._peak_heat = 0.0
 
-    def update(self, t, heat):
-        """heat in [0,1]. dt from previous t (8ms ticks)."""
+    def update(self, t, heat, amb=0.0):
+        """heat (wiggle) and amb (ambient speed) in [0,1]; the combination
+        drives scale/alpha/energy, but settling keys on wiggle heat alone."""
         dt = 0.0 if self._t is None else min(max(t - self._t, 0.0), 0.05)
         self._t = t
         heat = max(0.0, min(1.0, heat))
-        self._peak_heat = max(self._peak_heat, heat)
-        c = 2 * math.sqrt(self._k) * self._z
-        tgt = self.start + (self.peak - self.start) * heat
-        self.v += (-self._k * (self.scale - tgt) - c * self.v) * dt
+        h = min(1.0, heat + max(0.0, amb))
+        # U1: leaky peak — energy melts away with the aura instead of
+        # staying pinned at the last shake's maximum (stale-hot melt bug)
+        self._peak_heat = max(h, self._peak_heat * math.exp(-dt / 0.35))
+        # U3: asymmetric spring — exits 1.6x stiffer than enters, so the
+        # melt lets go quicker than the grow (Material 225/195 pair)
+        tgt = self.start + (self.peak - self.start) * h
+        melting = tgt < self.scale
+        k = self._k * (1.6 if melting else 1.0)
+        z = min(1.0, self._z + (0.12 if melting else 0.0))
+        c = 2 * math.sqrt(k) * z
+        self.v += (-k * (self.scale - tgt) - c * self.v) * dt
         self.scale += self.v * dt
-        ta = 1.0 if heat > 0.02 else 0.0          # full opacity while hot
-        self.av += (-150.0 * (self.alpha - ta) - 2 * math.sqrt(150.0) * self.av) * dt
+        ta = (0.35 + 0.65 * h) if h > 0.02 else 0.0   # whisper-dim at low heat
+        self.av += (-260.0 * (self.alpha - ta) - 2 * math.sqrt(260.0) * self.av) * dt
         self.alpha = max(0.0, self.alpha + self.av * dt)
         if self._reduced:
             self.scale = 1.0
         if abs(self.scale - tgt) < 0.01 and abs(self.v) < 0.05 and heat < 0.02:
             if self._settled_at is None:
                 self._settled_at = t
+                self._peak_heat = 0.0
         else:
             self._settled_at = None
         return self.alpha
@@ -141,7 +154,9 @@ class AuraMachine:
 
     @property
     def energy(self):
-        """0..1 heat-at-trigger; scales sparkles/stars/glow intensity."""
+        """0..1 *recent* heat: peak held, then e-folds toward the current
+        heat target over ~1.2 s — sparkles/glow/bursts melt down instead of
+        staying pinned at the last violent shake."""
         return self._peak_heat
 
 
@@ -153,12 +168,12 @@ class StarField:
         self.rng = random.Random(seed)
         self._stars = []                    # (t0, ang, spd, size, life, spin, tw)
 
-    def burst(self, t, n=None):
+    def burst(self, t, n=None, size=1.0):
         for _ in range(n or self.n):
             ang = self.rng.uniform(0, math.tau)
             self._stars.append((t, ang,
-                                self.rng.uniform(260.0, 620.0),    # px/s outward
-                                self.rng.uniform(4.0, 11.0),       # size px
+                                self.rng.uniform(260.0, 620.0) * (0.6 + 0.5 * size),  # px/s outward
+                                self.rng.uniform(4.0, 11.0) * size,                  # size px
                                 self.rng.uniform(1.25, 1.9),       # life s
                                 self.rng.uniform(-2.5, 2.5),       # spin rad/s
                                 self.rng.uniform(0.5, 1.5)))       # twinkle rate

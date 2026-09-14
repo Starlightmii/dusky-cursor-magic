@@ -31,6 +31,13 @@
  "aura": {
   "trail": true
  },
+ "ambient": {
+  "on": true,
+  "min_speed": 150.0,
+  "speed_range": 900.0,
+  "max_gain": 0.35,
+  "idle_shimmer": true
+ },
  "canvas_px": 512,
  "glow": {
   "color": [

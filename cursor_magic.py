@@ -10,8 +10,8 @@ gi.require_version("Gtk", "3.0"); gi.require_version("Gdk", "3.0")
 gi.require_version("GdkPixbuf", "2.0"); gi.require_version("GtkLayerShell", "0.1")
 from gi.repository import Gtk, Gdk, GdkPixbuf, GtkLayerShell, GLib
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-from magic_core import (WiggleDetector, AuraMachine, StarField, frame_index,
-                        load_packs, decode_frames, load_config)
+from magic_core import (WiggleDetector, AuraMachine, StarField, SpeedEstimator,
+                        frame_index, load_packs, decode_frames, load_config)
 
 PACK_DIRS = [os.path.expanduser("~/.config/dusky/cursor-magic/packs"),
              os.path.join(os.path.dirname(os.path.abspath(__file__)), "packs")]
@@ -52,6 +52,9 @@ class Daemon:
         self.stars = StarField(n=cfg.get("stars", {}).get("per_burst", 10),
                                seed=None)
         self._prev = time.perf_counter()
+        self.speed_est = SpeedEstimator(window_s=0.05)   # U5: ambient breath
+        self._sm = None                                  # U4: smoothed glow center
+        self._last_alive = time.perf_counter()           # U8: idle shimmer clock
         self._demo_t = 0.0 if demo else None
         self.pixbufs, self.durations, self.total, self.pack_t0 = [], [], 0.0, 0.0
         self.sprite_on = False
@@ -173,12 +176,16 @@ class Daemon:
                 break
             if ev["kind"] == "press":
                 self.click_fx.append((now, ev.get("dbl", False)))
+                self._last_alive = now          # any click counts as alive (U8)
                 if self.cfg.get("clicks", {}).get("stars", True):
                     self._star_burst(now, 6 if not ev.get("dbl") else 14)
 
-    def _star_burst(self, now, n):
+    def _star_burst(self, now, n, size=1.0):
         if not self._reduced and self.cfg.get("stars", {}).get("enabled", True):
-            self.stars.burst(now, n)
+            # U2: count answers energy too — gentle flick sprinkles, wild shake
+            # throws fireworks (leaky energy after U1, so melts cool down)
+            e = self.aura.energy
+            self.stars.burst(now, int(n * (0.5 + 0.8 * e)), size)
 
     # main loop ---------------------------------------------------------------
     def hot_reload(self):
@@ -247,27 +254,60 @@ class Daemon:
                         self.cfg["emotion"], self.cfg.get("sprite_pack") or None)
                     if self.sprite_on:
                         self.aura._peak_heat = self.wig.heat
-            # comet trail: remember recent path while the aura is alive
-            if self.aura.alpha > 0.02:
+            # U5: ambient whisper — feed the (until-now unused) SpeedEstimator;
+            # ordinary glide speed lifts the aura to a faint breath, never near
+            # arm_heat, so no sprite / false shake trigger
+            sp = self.speed_est.feed(now, pos[0], pos[1])
+            am = self.cfg.get("ambient", {})
+            amb = 0.0
+            if am.get("on", True) and not self._reduced:
+                amb = max(0.0, min(1.0, (sp - am.get("min_speed", 150.0)) /
+                                   am.get("speed_range", 900.0))) \
+                      * am.get("max_gain", 0.35)
+            # U7 comet trail: 0.35s window; stop feeding when parked so the
+            # tail dissolves on stop instead of freezing into a ribbon
+            if self.aura.alpha > 0.02 and sp > 60.0:
                 self.trail.append((now, pos[0], pos[1]))
-            while self.trail and now - self.trail[0][0] > 0.6:
+            while self.trail and now - self.trail[0][0] > 0.35:
                 self.trail.pop(0)
             del self.click_fx[:max(0, len(self.click_fx) - 8)]
             self.click_fx = [c for c in self.click_fx if now - c[0] < 0.6]
             # one star burst per reversal pulse while the detector is hot
             self._last_rev = getattr(self, "_last_rev", self.wig.rev_count)
             if self.wig.rev_count != self._last_rev:
-                self._star_burst(now, self.cfg.get("stars", {}).get("per_burst", 10))
+                # ponytail: burst size answers the shake's violence (heat)
+                self._star_burst(now, self.cfg.get("stars", {}).get("per_burst", 10),
+                                 size=0.6 + 0.8 * self.wig.heat)
                 self._last_rev = self.wig.rev_count
-            self.aura.update(now, self.wig.heat)
+            # velocity for squash-stretch: px/s between last two cursor samples
+            if getattr(self, "_p_last", None) is not None and dt > 1e-4:
+                vx = (pos[0] - self._p_last[0]) / dt
+                vy = (pos[1] - self._p_last[1]) / dt
+                self._vel = (math.hypot(vx, vy), math.atan2(vy, vx))
+            self._p_last = pos
+            self.aura.update(now, self.wig.heat, amb)
+            # U4: smoothed glow center — dt-correct 35ms follower kills the
+            # flick strobe; raw pos stays the anchor for clicks/star bursts
+            a4 = 1.0 - math.exp(-dt / 0.035)
+            sx, sy = self._sm if self._sm else pos
+            self._sm = (sx + (pos[0] - sx) * a4, sy + (pos[1] - sy) * a4)
+            # alive: real motion pushes back the idle-shimmer clock (U8)
+            if sp > 60.0:
+                self._last_alive = now
             if (self.aura.settled(now) and self.stars.count == 0
                     and self.sprite_on):
                 self.sprite_on = False; self.pixbufs = []
+        # U8: idle shimmer — faint starlight orbit while the cursor rests
+        # (2s after last motion/click, auto-suspended after 10s)
+        am = self.cfg.get("ambient", {})
+        idle = (am.get("idle_shimmer", True) and not self._reduced
+                and self._demo_t is None and 2.0 < now - self._last_alive < 10.0)
+        self._idle = idle
         # surface exists only while something is visible (click-through guarantee)
-        if (self.aura.alpha > 0.01 or self.stars.count) and not self.win.get_visible():
+        if (self.aura.alpha > 0.01 or self.stars.count or idle) and not self.win.get_visible():
             self.win.show_all()
             self._fresh = True
-        elif self.aura.alpha <= 0.01 and self.stars.count == 0 and self.win.get_visible():
+        elif self.aura.alpha <= 0.01 and self.stars.count == 0 and not idle and self.win.get_visible():
             self.win.hide()
         if self.win.get_visible():
             if getattr(self, "_fresh", False):
@@ -278,11 +318,15 @@ class Daemon:
 
     def position(self, pos):
         C = self.cfg["canvas_px"]
-        ml = max(0, pos[0] - C // 2); mt = max(0, pos[1] - C // 2)
+        # U4: the glow rides the 35ms-smoothed follower (set in tick); raw
+        # pos stays the anchor for click ripples and star bursts
+        sx, sy = self._sm if self._sm else pos
+        ml = max(0, int(sx) - C // 2); mt = max(0, int(sy) - C // 2)
         self._o = (ml, mt)
         GtkLayerShell.set_margin(self.win, GtkLayerShell.Edge.LEFT, ml)
         GtkLayerShell.set_margin(self.win, GtkLayerShell.Edge.TOP, mt)
-        self.center = (pos[0] - ml, pos[1] - mt)
+        self.center = (sx - ml, sy - mt)
+        self._anchor = (pos[0] - ml, pos[1] - mt)
 
     # paint -----------------------------------------------------------------
     def draw(self, w, cr):
@@ -295,9 +339,19 @@ class Daemon:
         if a > 0.003 or self.stars.count or self.click_fx:
             self._comet(cr)
             self._click_ripples(cr)
+        elif getattr(self, "_idle", False):
+            self._shimmer(cr)                      # U8: alive even at rest
         if a > 0.003:
             es = (m.scale - m.start) / max(0.01, m.peak - m.start)
             cr.set_operator(cairo.OPERATOR_ADD)
+            # ponytail: velocity squash-stretch — aura elongates along motion.
+            # strength 0.18@3kpx/s, square-root area preserve; drop when idle.
+            vsp, vang = getattr(self, "_vel", (0.0, 0.0))
+            sq = 1 + 0.18 * min(1.0, vsp / 3000.0) if not self._reduced else 1.0
+            if sq != 1.0:
+                cr.save()
+                cr.translate(cx, cy); cr.rotate(vang)
+                cr.scale(sq, 1.0 / math.sqrt(sq)); cr.translate(-cx, -cy)
             # living aura: breathes with the spring (es) — always on while hot
             R = g["outer_r"] * C * (0.45 + 0.55 * es) * (0.6 + 0.4 * e)
             gr = cairo.RadialGradient(cx, cy, 0, cx, cy, R)
@@ -313,13 +367,16 @@ class Daemon:
             cr.set_source(gr2); cr.paint()
             if self.sprite_on and self.pixbufs:
                 self._draw_sprite(cr, cx, cy, C, m, a)
+            if sq != 1.0:
+                cr.restore()          # ponytail: end squash-stretch xform
             self._particles(cr, cx, cy, m, a, e)
             self._ring(cr, cx, cy, C, m, col)
         self._starlight(cr, cx, cy, m)
         return False
 
     def _comet(self, cr):
-        """Fading starlit comet behind the aura — the cursor's tail."""
+        """Tapered starlit comet — fat bright head, thin dark tip, dissolves
+        ~350ms after you stop (never a frozen ribbon)."""
         if not self.cfg.get("aura", {}).get("trail", True):
             return
         if len(self.trail) < 2:
@@ -328,39 +385,44 @@ class Daemon:
         now = time.perf_counter()
         col = self.cfg.get("stars", {}).get("color", [1.0, 0.95, 0.75])
         cr.set_operator(cairo.OPERATOR_ADD)
+        # U7: head width answers live speed (not stale energy)
+        vsp = getattr(self, "_vel", (0.0, 0.0))[0]
+        head_w = 3.0 + 5.0 * min(1.0, vsp / 4000.0)
         prev = None
         for (t, x, y) in self.trail:
-            life = 1.0 - (now - t) / 0.6
+            life = 1.0 - (now - t) / 0.35
             if life <= 0 or prev is None:
                 prev = (x - ox, y - oy); continue
             px, py = x - ox, y - oy
-            cr.set_line_width(1.0 + 6.0 * life * self.aura.energy)
-            cr.set_source_rgba(*col, 0.14 * life * self.aura.alpha)
+            cr.set_line_width(max(0.5, head_w * life ** 1.5))
+            cr.set_source_rgba(*col, 0.16 * life ** 2 * self.aura.alpha)
             cr.move_to(*prev); cr.line_to(px, py); cr.stroke()
             prev = (px, py)
 
     def _click_ripples(self, cr):
-        """Click = sonar ripple + twinkle, at the moment of press."""
+        """Click = springy sonar ripple (easeOutBack) at the raw press point."""
         if not self.click_fx:
             return
-        ox, oy = getattr(self, "_o", (0, 0))
         now = time.perf_counter()
         col = self.cfg["glow"]["color"]
+        C = self.cfg["canvas_px"]
         cr.set_operator(cairo.OPERATOR_ADD)
         for (t0, dbl) in self.click_fx:
             age = now - t0
             if age > 0.6:
                 continue
-            u = age / 0.6
-            cx0, cy0 = self.center
+            u = min(1.0, age / 0.45)               # U6: 600 -> 450 ms
+            ax, ay = getattr(self, "_anchor", self.center)
             for k in range(2 if dbl else 1):
                 uu = max(0.0, u - k * 0.12)
                 if uu <= 0:
                     continue
-                r = (0.06 + 0.42 * uu) * self.cfg["canvas_px"] * (0.8 if k else 1.0)
-                cr.set_line_width(2.5 * (1.0 - uu))
-                cr.set_source_rgba(*col, (1.0 - uu) * 0.55)
-                cr.arc(cx0, cy0, r, 0, 2 * math.tau)
+                b = 1.70158                        # easeOutBack: launch fast,
+                e = 1 + (b + 1) * (uu - 1) ** 3 + b * (uu - 1) ** 2  # ~10% boing
+                r = min((0.02 + 0.45 * e) * C, 0.47 * C) * (0.8 if k else 1.0)
+                cr.set_line_width(2.5 * (1.0 - uu) + 0.5)
+                cr.set_source_rgba(*col, (1.0 - uu) ** 1.6 * 0.55)
+                cr.arc(ax, ay, r, 0, 2 * math.tau)
                 cr.stroke()
 
     def _draw_sprite(self, cr, cx, cy, C, m, a):
@@ -421,14 +483,34 @@ class Daemon:
                 cr.arc(cx, cy, (0.25 + 0.75 * u) * C * 0.5, 0, 2 * math.tau)
                 cr.stroke()
 
+    def _shimmer(self, cr):
+        """U8: idle shimmer — 3 tiny stars in a slow orbit, breathing at
+        whisper alpha (3-5%) around the resting cursor. Never fights the
+        pointer for attention; real effects take over on any motion."""
+        t = time.perf_counter()
+        ax, ay = getattr(self, "_anchor", self.center)
+        col = self.cfg.get("stars", {}).get("color", [1.0, 0.95, 0.75])
+        cr.set_operator(cairo.OPERATOR_ADD)
+        for i in range(3):
+            ang = t * 0.05 * math.tau + i * (math.tau / 3)
+            r = 26.0 + 4.0 * math.sin(t * 0.6 + i * 2.1)
+            x, y = ax + r * math.cos(ang), ay + r * math.sin(ang)
+            breathe = 0.5 + 0.5 * math.sin(t * 0.6)
+            cr.set_source_rgba(*col, 0.035 * breathe)
+            cr.arc(x, y, 1.6 + 0.6 * breathe, 0, math.tau)
+            cr.fill()
+
     def _starlight(self, cr, cx, cy, m):
-        """Starlight's signature: 4-point stars spreading out, spinning, twinkling."""
+        """Starlight's signature: 4-point stars spreading out, spinning, twinkling.
+        Anchored at the raw cursor sample — bursts come FROM where you flicked,
+        not from the smoothed follower (U4)."""
         t = time.perf_counter()
         st = self.cfg.get("stars", {})
         col = st.get("color", [1.0, 0.95, 0.75])
+        ax, ay = getattr(self, "_anchor", (cx, cy))
         cr.set_operator(cairo.OPERATOR_ADD)
         for (ang, r, size, rot, al) in self.stars.stars(t):
-            x, y = cx + r * math.cos(ang), cy + r * math.sin(ang) * 0.85
+            x, y = ax + r * math.cos(ang), ay + r * math.sin(ang) * 0.85
             cr.save(); cr.translate(x, y); cr.rotate(rot)
             # 4-point star: outer tips at size, inner waist at size*0.38
             pts = []

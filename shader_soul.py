@@ -137,17 +137,22 @@ class Aura:
             * (0.55 + 0.25 * energy) * pulse
         glow = np.maximum(glow, 0.0)
         if core:
-            # arrow hidden -> we ARE the cursor: bright breathing orb
-            cr_ = self.R0 * 0.18 * (1.0 + 0.12 * math.sin(t * 2.6))
-            glow += np.exp(-((r / cr_) ** 2)) * 1.6
+            # arrow hidden -> we ARE the cursor: opaque white-hot core (blue
+            # halo from the ring carries the fantasy tint), reads on any page
+            cr_ = self.R0 * 0.24 * (1.0 + 0.12 * math.sin(t * 2.6))
+            core_w = np.exp(-((r / cr_) ** 2))
+            glow += core_w * 2.2
         else:
             # soft hole so the real cursor sprite stays crisp at the centre
             glow *= np.clip((r - 10.0) / 24.0, 0.0, 1.0)
+            core_w = None
         a = np.clip(glow * self.ascale, 0.0, 1.0)
         tint = np.clip(wob * 0.6 + speed * 0.55 + energy * 0.35, 0.0, 1.0)[..., None]
         cool = np.array((0.42, 0.62, 1.00), np.float32)
         warm = np.array((1.00, 0.72, 0.38), np.float32)
         rgb = cool + (warm - cool) * tint
+        if core_w is not None:
+            rgb = rgb + (1.0 - rgb) * np.clip(core_w * 3.0, 0.0, 1.0)[..., None]
         alpha_u8 = (a * 255).astype(np.uint8)
         # premultiplied -> ARGB32 native uint32 (A<<24 | R<<16 | G<<8 | B)
         argb = ((alpha_u8.astype(np.uint32) << 24)

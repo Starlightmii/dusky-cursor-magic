@@ -57,7 +57,9 @@ def slice_cmd(a):
     for r0, r1 in zip(rb, rb[1:]):
         for c0, c1 in zip(cb, cb[1:]):
             cell = alpha[r0:r1, c0:c1]
-            if not cell.any():
+            # a "frame" whose opaque-enough pixels number <200 is faint smoke
+            # residue, not content — drop it (alpha>8 gate mirrors test_packs)
+            if (cell > 8).sum() < 200:
                 continue
             sub = im.crop((c0, r0, c1, r1))
             bbox = sub.getbbox()  # trim to content, then center on canvas

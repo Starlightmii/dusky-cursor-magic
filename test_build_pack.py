@@ -16,7 +16,7 @@ SHEET = "/tmp/spell/sphere_blue.png"
 def main():
     assert os.path.isfile(SHEET), f"missing {SHEET}"
     ref = len([f for f in os.listdir(os.path.join(HERE, "packs/spells/orbsoul")) if f.endswith(".png")])
-    assert ref == 27, f"orbsoul ref count moved: {ref}"
+    assert ref == 26, f"orbsoul ref count moved: {ref}"
 
     tmp = tempfile.mkdtemp(prefix="build_pack_")
     try:
@@ -27,8 +27,8 @@ def main():
         assert r.returncode == 0, "slice failed"
         frames_dir = os.path.join(pack, "orbsoul_test")
         frames = sorted(os.listdir(frames_dir))
-        assert len(frames) == 27, f"expected 27 frames, got {len(frames)}"
-        assert frames[0] == "f000.png" and frames[-1] == "f026.png", frames[:2] + frames[-2:]
+        assert len(frames) == 26, f"expected 26 frames, got {len(frames)}"
+        assert frames[0] == "f000.png" and frames[-1] == "f025.png", frames[:2] + frames[-2:]
         for f in frames:
             im = Image.open(os.path.join(frames_dir, f))
             assert im.size == (256, 256) and im.mode == "RGBA", (f, im.size, im.mode)
@@ -36,7 +36,7 @@ def main():
         m = json.load(open(os.path.join(pack, "manifest.json")))
         assert m["name"] == "orbsoul_test" and m["attribution"] == "test attr"
         spec = m["emotions"]["orbsoul_test"]
-        assert spec == {"type": "seq", "path": "orbsoul_test/", "frames": 27, "fps": 15}, spec
+        assert spec == {"type": "seq", "path": "orbsoul_test/", "frames": 26, "fps": 15}, spec  # 26 after residue-frame drop
         assert os.path.isfile(os.path.join(pack, "LICENSE.txt")), "new pack needs LICENSE.txt"
 
         # --- mirror into a temp dir: copies diffing packs, skips identical ---

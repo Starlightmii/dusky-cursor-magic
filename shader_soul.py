@@ -107,13 +107,14 @@ class Aura:
         self.nx = self.gx * 0.028
         self.ny = self.gy * 0.028
 
-    def render(self, t, speed, energy, ripples, out, core=False):
+    def render(self, t, speed, energy, ripples, out, core=False, hot=(0.0, 0.0)):
         """Fill ARGB32 numpy `out` (F x F view) with the current aura frame.
-        Pointer sits at field centre; ripples carry (gx,gy,age,strength).
-        core=True: system arrow hidden -> we ARE the cursor, paint a bright
-        orb at the centre instead of punching the soft hole for it."""
+        hot = pointer offset from canvas centre in canvas px (non-zero at
+        screen edges where the layer window clamps). Ripples carry
+        (gx,gy,age,strength); core=True paints the orb AT the pointer."""
         R = self.R0 * (1.0 + self.grow * speed) * self.strength
-        r = self.r
+        r = (self.r if hot == (0.0, 0.0) else
+             np.hypot(self.gx - hot[0], self.gy - hot[1]))
         # organic warp
         wob = fbm(self.nx + self.seed, self.ny + t * 0.18
                   + fbm(self.nx * 0.5 - t * 0.06, self.ny * 0.5, 2) * 0.9, 3)
@@ -292,12 +293,14 @@ def main():
 
     click_q = __import__("collections").deque()
     watcher = ClickWatcher(); watcher.start(on_click)
+    hot_st = [0.0, 0.0]              # live pointer offset from canvas centre
 
     def poll_clicks(now):
         while click_q:
             ev = click_q.popleft()
             energy[0] = 1.0
-            ripples.append((0.0, 0.0, now, 1.0))
+            ripples.append((hot_st[0] / Aura.SCALE, hot_st[1] / Aura.SCALE,
+                            now, 1.0))
             del ripples[:-4]
 
     pos_file = os.environ.get("AURA_POS_FILE")   # test seam: file has 'x y'
@@ -325,6 +328,8 @@ def main():
         last[0] = (x, y)
         ml = min(max(x - C // 2, 0), screen[0] - C)
         mt = min(max(y - C // 2, 0), screen[1] - C)
+        hot = (float(x - ml - C // 2), float(y - mt - C // 2))
+        hot_st[0], hot_st[1] = hot
         GtkLayerShell.set_margin(win, GtkLayerShell.Edge.LEFT, ml)
         GtkLayerShell.set_margin(win, GtkLayerShell.Edge.TOP, mt)
         poll_clicks(now)
@@ -337,7 +342,7 @@ def main():
         aura.R0 = float(ac.get("radius", args.radius))
         aura.strength = float(ac.get("strength", args.strength))
         aura.render(now - start, speed[0], energy[0], live, buf,
-                    core=bool(ac.get("hide_arrow")))
+                    core=bool(ac.get("hide_arrow")), hot=hot)
         surf_box[0] = cairo.ImageSurface.create_for_data(
             buf.view(np.uint8), cairo.FORMAT_ARGB32, F, F)
         area.queue_draw()

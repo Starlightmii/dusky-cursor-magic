@@ -175,10 +175,21 @@ class Daemon:
             except IndexError:
                 break
             if ev["kind"] == "press":
-                self.click_fx.append((now, ev.get("dbl", False)))
+                self.click_fx.append((now, ev.get("dbl", False), "click"))
                 self._last_alive = now          # any click counts as alive (U8)
+                # Cycle-2: remember the press anchor so tick can measure drag
+                if ev.get("button", "left") == "left":
+                    ax, ay = getattr(self, "_p_last", (None, None))
+                    self._press = {"x": ax, "y": ay, "moved": 0.0} \
+                        if ax is not None else None
                 if self.cfg.get("clicks", {}).get("stars", True):
                     self._star_burst(now, 6 if not ev.get("dbl") else 14)
+            elif ev["kind"] == "release" and ev.get("button") == "left":
+                # Cycle-2: a held press that travelled = drag -> wake ripple
+                pr = getattr(self, "_press", None)
+                if pr and pr.get("moved", 0.0) > 12.0:
+                    self.click_fx.append((now, False, "drag"))
+                self._press = None
 
     def _star_burst(self, now, n, size=1.0):
         if not self._reduced and self.cfg.get("stars", {}).get("enabled", True):
@@ -271,7 +282,7 @@ class Daemon:
             while self.trail and now - self.trail[0][0] > 0.35:
                 self.trail.pop(0)
             del self.click_fx[:max(0, len(self.click_fx) - 8)]
-            self.click_fx = [c for c in self.click_fx if now - c[0] < 0.6]
+            self.click_fx = [c for c in self.click_fx if now - c[0] < 0.75]
             # one star burst per reversal pulse while the detector is hot
             self._last_rev = getattr(self, "_last_rev", self.wig.rev_count)
             if self.wig.rev_count != self._last_rev:
@@ -285,6 +296,11 @@ class Daemon:
                 vy = (pos[1] - self._p_last[1]) / dt
                 self._vel = (math.hypot(vx, vy), math.atan2(vy, vx))
             self._p_last = pos
+            # Cycle-2: live drag distance while a press is held
+            pr = getattr(self, "_press", None)
+            if pr and pr.get("x") is not None:
+                pr["moved"] = max(pr["moved"],
+                                  math.hypot(pos[0] - pr["x"], pos[1] - pr["y"]))
             self.aura.update(now, self.wig.heat, amb)
             # U4: smoothed glow center — dt-correct 35ms follower kills the
             # flick strobe; raw pos stays the anchor for clicks/star bursts
@@ -304,10 +320,12 @@ class Daemon:
                 and self._demo_t is None and 2.0 < now - self._last_alive < 10.0)
         self._idle = idle
         # surface exists only while something is visible (click-through guarantee)
-        if (self.aura.alpha > 0.01 or self.stars.count or idle) and not self.win.get_visible():
+        if (self.aura.alpha > 0.01 or self.stars.count or self.click_fx
+                or idle) and not self.win.get_visible():
             self.win.show_all()
             self._fresh = True
-        elif self.aura.alpha <= 0.01 and self.stars.count == 0 and not idle and self.win.get_visible():
+        elif (self.aura.alpha <= 0.01 and self.stars.count == 0
+              and not self.click_fx and not idle and self.win.get_visible()):
             self.win.hide()
         if self.win.get_visible():
             if getattr(self, "_fresh", False):
@@ -344,6 +362,8 @@ class Daemon:
         if a > 0.003:
             es = (m.scale - m.start) / max(0.01, m.peak - m.start)
             cr.set_operator(cairo.OPERATOR_ADD)
+            # Cycle-2: aura hue follows heat — calm blue-calm to warm at full shake
+            col = self._tint()
             # ponytail: velocity squash-stretch — aura elongates along motion.
             # strength 0.18@3kpx/s, square-root area preserve; drop when idle.
             vsp, vang = getattr(self, "_vel", (0.0, 0.0))
@@ -399,6 +419,18 @@ class Daemon:
             cr.move_to(*prev); cr.line_to(px, py); cr.stroke()
             prev = (px, py)
 
+    def _tint(self):
+        """Cycle-2: lerp the glow color toward warm as heat/energy rises —
+        the aura reads calm-cool at rest, candle-warm in a violent shake.
+        getattr-tolerant: visual-proxy tests build Daemon without .wig."""
+        g = self.cfg["glow"]
+        col = g["color"]
+        wc = g.get("warm_color", [1.0, 0.72, 0.42])   # candle-warm fallback
+        wig = getattr(self, "wig", None)
+        heat = wig.heat if wig is not None else 0.0
+        k = min(1.0, 0.55 * heat + 0.45 * self.aura.energy)
+        return tuple(c + (w - c) * k for c, w in zip(col, wc))
+
     def _click_ripples(self, cr):
         """Click = springy sonar ripple (easeOutBack) at the raw press point."""
         if not self.click_fx:
@@ -407,12 +439,24 @@ class Daemon:
         col = self.cfg["glow"]["color"]
         C = self.cfg["canvas_px"]
         cr.set_operator(cairo.OPERATOR_ADD)
-        for (t0, dbl) in self.click_fx:
+        for fx in self.click_fx:
+            # 2-tuples (pre cycle-2) render as clicks
+            t0, dbl, kind = fx if len(fx) == 3 else (fx[0], fx[1], "click")
             age = now - t0
-            if age > 0.6:
+            if age > 0.75:
                 continue
             u = min(1.0, age / 0.45)               # U6: 600 -> 450 ms
             ax, ay = getattr(self, "_anchor", self.center)
+            if kind == "drag":
+                # wake: slower wider softer ring — release of a held drag
+                uu = min(1.0, age / 0.7)
+                e = 1.0 - (1.0 - uu) ** 3         # easeOutCubic glide
+                r = (0.05 + 0.50 * e) * C
+                cr.set_line_width(3.5 * (1.0 - uu) + 0.5)
+                cr.set_source_rgba(*self._tint(), (1.0 - uu) ** 2 * 0.40)
+                cr.arc(ax, ay, r, 0, 2 * math.tau)
+                cr.stroke()
+                continue
             for k in range(2 if dbl else 1):
                 uu = max(0.0, u - k * 0.12)
                 if uu <= 0:

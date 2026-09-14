@@ -45,6 +45,11 @@
    0.82,
    1.0
   ],
+  "warm_color": [
+   1.0,
+   0.72,
+   0.42
+  ],
   "soft_alpha": 0.1,
   "inner_alpha": 0.16,
   "outer_r": 0.49,

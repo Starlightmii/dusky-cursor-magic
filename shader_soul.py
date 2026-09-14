@@ -107,9 +107,11 @@ class Aura:
         self.nx = self.gx * 0.028
         self.ny = self.gy * 0.028
 
-    def render(self, t, speed, energy, ripples, out):
+    def render(self, t, speed, energy, ripples, out, core=False):
         """Fill ARGB32 numpy `out` (F x F view) with the current aura frame.
-        Pointer sits at field centre; ripples carry (gx,gy,age,strength)."""
+        Pointer sits at field centre; ripples carry (gx,gy,age,strength).
+        core=True: system arrow hidden -> we ARE the cursor, paint a bright
+        orb at the centre instead of punching the soft hole for it."""
         R = self.R0 * (1.0 + self.grow * speed) * self.strength
         r = self.r
         # organic warp
@@ -134,8 +136,13 @@ class Aura:
         glow += np.exp(-(((r - ringR) / (self.R0 * 0.05)) ** 2)) \
             * (0.55 + 0.25 * energy) * pulse
         glow = np.maximum(glow, 0.0)
-        # soft hole so the real cursor sprite stays crisp at the centre
-        glow *= np.clip((r - 10.0) / 24.0, 0.0, 1.0)
+        if core:
+            # arrow hidden -> we ARE the cursor: bright breathing orb
+            cr_ = self.R0 * 0.18 * (1.0 + 0.12 * math.sin(t * 2.6))
+            glow += np.exp(-((r / cr_) ** 2)) * 1.6
+        else:
+            # soft hole so the real cursor sprite stays crisp at the centre
+            glow *= np.clip((r - 10.0) / 24.0, 0.0, 1.0)
         a = np.clip(glow * self.ascale, 0.0, 1.0)
         tint = np.clip(wob * 0.6 + speed * 0.55 + energy * 0.35, 0.0, 1.0)[..., None]
         cool = np.array((0.42, 0.62, 1.00), np.float32)
@@ -324,7 +331,8 @@ def main():
         aura.ascale = float(ac.get("glow", args.glow))
         aura.R0 = float(ac.get("radius", args.radius))
         aura.strength = float(ac.get("strength", args.strength))
-        aura.render(now - start, speed[0], energy[0], live, buf)
+        aura.render(now - start, speed[0], energy[0], live, buf,
+                    core=bool(ac.get("hide_arrow")))
         surf_box[0] = cairo.ImageSurface.create_for_data(
             buf.view(np.uint8), cairo.FORMAT_ARGB32, F, F)
         area.queue_draw()

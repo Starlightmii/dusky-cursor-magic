@@ -14,12 +14,22 @@
   "start_scale": 0.35
  },
  "stars": {
+  "enabled": true,
   "per_burst": 10,
   "color": [
    1.0,
    0.95,
    0.75
   ]
+ },
+ "sprite": {
+  "bob": true,
+  "spin": true,
+  "size": 1.0,
+  "frame_loop": true
+ },
+ "aura": {
+  "trail": true
  },
  "canvas_px": 512,
  "glow": {

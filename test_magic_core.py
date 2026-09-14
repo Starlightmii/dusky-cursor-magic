@@ -109,11 +109,26 @@ def test_star_cap():
     for i in range(6): s.burst(i * 0.5)
     assert s.count <= 120
 
+def test_frame_index_loops():
+    from magic_core import frame_index
+    d = [0.04, 0.04, 0.04, 0.1]                  # total 0.22
+    assert frame_index(d, -0.01) == 3            # wraps negative
+    assert frame_index(d, 0.0) == 0
+    assert frame_index(d, 0.05) == 1
+    assert frame_index(d, 0.11) == 2
+    assert frame_index(d, 0.16) == 3
+    assert frame_index(d, 0.22) == 0             # wraps past total
+    assert frame_index(d, 1.0) == frame_index(d, 1.0 % 0.22)  # continuous loop
+    assert frame_index([], 5.0) == 0
+
 def test_pack_loading():
     import os
     from magic_core import load_packs, decode_frames, load_config
     cfg = load_config()
     assert cfg["stars"]["per_burst"] == 10
+    assert cfg["sprite"]["bob"] and cfg["sprite"]["frame_loop"]
+    assert cfg["aura"]["trail"] and cfg["stars"]["enabled"]
+    assert cfg["sprite"]["size"] == 1.0
     assert cfg["wiggle"]["need"] == 2
     mo = cfg["motion"]
     assert 1.4 <= mo["peak_scale"] <= 3.0

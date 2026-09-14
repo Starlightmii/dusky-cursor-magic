@@ -185,6 +185,21 @@ class StarField:
         return len(self._stars)
 
 
+def frame_index(durations, t):
+    """Index of the frame at elapsed time t inside a looping animation.
+    Wraps forever: frame = durations[:n] played back-to-back, t % total."""
+    total = float(sum(durations)) if durations else 0.0
+    if not durations or total <= 0.0:
+        return 0
+    t %= total
+    acc = 0.0
+    for i, d in enumerate(durations):
+        acc += d
+        if t < acc:
+            return i
+    return len(durations) - 1
+
+
 # ---- packs ------------------------------------------------------------------
 
 def load_packs(pack_dir):

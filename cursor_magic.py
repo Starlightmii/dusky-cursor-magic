@@ -10,7 +10,7 @@ gi.require_version("Gtk", "3.0"); gi.require_version("Gdk", "3.0")
 gi.require_version("GdkPixbuf", "2.0"); gi.require_version("GtkLayerShell", "0.1")
 from gi.repository import Gtk, Gdk, GdkPixbuf, GtkLayerShell, GLib
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-from magic_core import (WiggleDetector, AuraMachine, StarField,
+from magic_core import (WiggleDetector, AuraMachine, StarField, frame_index,
                         load_packs, decode_frames, load_config)
 
 PACK_DIRS = [os.path.expanduser("~/.config/dusky/cursor-magic/packs"),
@@ -48,11 +48,12 @@ class Daemon:
             prof = _auto_profile()
         self.aura = AuraMachine(peak_scale=mo["peak_scale"],
                                 start_scale=mo["start_scale"], profile=prof)
+        self._reduced = prof == "reduced"
         self.stars = StarField(n=cfg.get("stars", {}).get("per_burst", 10),
                                seed=None)
         self._prev = time.perf_counter()
         self._demo_t = 0.0 if demo else None
-        self.pixbufs, self.durations, self.total, self.pack_time = [], [], 0.0, 0.0
+        self.pixbufs, self.durations, self.total, self.pack_t0 = [], [], 0.0, 0.0
         self.sprite_on = False
         self.click_fx = []            # (t0, big)  -> ripple + star pop
         self.trail = []               # (t, x, y)  fading comet behind aura
@@ -125,7 +126,7 @@ class Daemon:
             f.convert("RGBA").tobytes(), GdkPixbuf.Colorspace.RGB, True, 8,
             f.width, f.height, f.width * 4) for f in frames]
         self.durations, self.total = durs, float(sum(durs))
-        self.pack_time = 0.0
+        self.pack_t0 = time.monotonic()
 
     def show_emotion(self, name, pack_name=None):
         for pname, pack in self.all_emotions().items():
@@ -148,7 +149,7 @@ class Daemon:
                     fps = spec.get("fps", 24)
                     self.durations = [1.0 / fps] * len(pb)
                     self.total = len(pb) / fps
-                    self.pack_time = 0.0
+                    self.pack_t0 = time.monotonic()
                     return True
                 frames, dur = decode_frames(spec["path"])   # gif OR single png
                 if frames:
@@ -173,7 +174,11 @@ class Daemon:
             if ev["kind"] == "press":
                 self.click_fx.append((now, ev.get("dbl", False)))
                 if self.cfg.get("clicks", {}).get("stars", True):
-                    self.stars.burst(now, 6 if not ev.get("dbl") else 14)
+                    self._star_burst(now, 6 if not ev.get("dbl") else 14)
+
+    def _star_burst(self, now, n):
+        if not self._reduced and self.cfg.get("stars", {}).get("enabled", True):
+            self.stars.burst(now, n)
 
     # main loop ---------------------------------------------------------------
     def hot_reload(self):
@@ -194,9 +199,13 @@ class Daemon:
             self.wig = WiggleDetector(**self.cfg["wiggle"])
         mo = self.cfg["motion"]
         if mo != old.get("motion"):
+            prof = mo.get("profile", "macos")
+            if prof == "auto":
+                prof = _auto_profile()
+            self._reduced = prof == "reduced"
             self.aura = AuraMachine(peak_scale=mo["peak_scale"],
                                     start_scale=mo["start_scale"],
-                                    profile=mo.get("profile", "macos"))
+                                    profile=prof)
         if self.disabled and self.win.get_visible():
             self.win.hide()
 
@@ -221,7 +230,7 @@ class Daemon:
                 self.sprite_on = True
                 self.show_emotion(self.demo or self.cfg["emotion"])
             if int(u / 0.10) != int((u - dt) / 0.10) and u < 0.7:
-                self.stars.burst(now, self.cfg.get("stars", {}).get("per_burst", 10))
+                self._star_burst(now, self.cfg.get("stars", {}).get("per_burst", 10))
             if u > 2.2:
                 self._demo_t = None
             self.aura.update(now, heat)
@@ -248,7 +257,7 @@ class Daemon:
             # one star burst per reversal pulse while the detector is hot
             self._last_rev = getattr(self, "_last_rev", self.wig.rev_count)
             if self.wig.rev_count != self._last_rev:
-                self.stars.burst(now, self.cfg.get("stars", {}).get("per_burst", 10))
+                self._star_burst(now, self.cfg.get("stars", {}).get("per_burst", 10))
                 self._last_rev = self.wig.rev_count
             self.aura.update(now, self.wig.heat)
             if (self.aura.settled(now) and self.stars.count == 0
@@ -264,7 +273,6 @@ class Daemon:
             if getattr(self, "_fresh", False):
                 self._fresh = False
             self.position(pos)
-            self.pack_time += dt if self.sprite_on else 0.0
             self.win.queue_draw()
         return True
 
@@ -312,6 +320,8 @@ class Daemon:
 
     def _comet(self, cr):
         """Fading starlit comet behind the aura — the cursor's tail."""
+        if not self.cfg.get("aura", {}).get("trail", True):
+            return
         if len(self.trail) < 2:
             return
         ox, oy = getattr(self, "_o", (0, 0))
@@ -354,18 +364,24 @@ class Daemon:
                 cr.stroke()
 
     def _draw_sprite(self, cr, cx, cy, C, m, a):
-        t = self.pack_time % self.total if self.total else 0.0
-        acc = 0.0; i = 0
-        for i, d in enumerate(self.durations):
-            acc += d
-            if t < acc: break
-        pb = self.pixbufs[min(i, len(self.pixbufs) - 1)]
+        sp = self.cfg.get("sprite", {})
+        now = time.monotonic()
+        t = now - self.pack_t0
+        if self.total:
+            t = t % self.total if sp.get("frame_loop", True) \
+                else min(t, self.total - 1e-3)   # one-shot: hold last frame
+        pb = self.pixbufs[frame_index(self.durations, t)
+                          if self.durations else 0]
         pw, ph = pb.get_width(), pb.get_height()
-        size = C * 0.35 * m.scale
+        size = C * 0.35 * m.scale * sp.get("size", 1.0)
+        e = m.energy
+        if not self._reduced and sp.get("bob", True):
+            size *= 1.0 + 0.03 * math.sin(now * (1.6 + 2.4 * e))
         fit = size / max(pw, ph)
         dw, dh = pw * fit, ph * fit
         cr.save(); cr.translate(cx, cy)
-        cr.rotate(0.014 * math.sin(m.scale * 3.0))
+        if not self._reduced and sp.get("spin", True):
+            cr.rotate(math.radians(2.0) * math.sin(now * (0.35 + 0.5 * e)))
         bp = pb.scale_simple(max(1, pw // 4), max(1, ph // 4), GdkPixbuf.InterpType.BILINEAR) \
              .scale_simple(max(1, int(dw / 4)), max(1, int(dh / 4)), GdkPixbuf.InterpType.NEAREST)
         Gdk.cairo_set_source_pixbuf(cr, bp, -dw / 2, -dh / 2)

@@ -17,7 +17,11 @@ REPO_PACKS = os.path.join(HERE, "packs")
 PIDFILE = "/tmp/magic_ctl.pid"
 PROFILES = ("macos", "snappy", "smooth", "reduced")
 SLIDERS = (("peak_scale", "motion", 1.5, 4.0, 0.05), ("gain", "wiggle", 0.1, 1.0, 0.01),
-           ("arm_heat", "wiggle", 0.2, 0.95, 0.01), ("tau_s", "wiggle", 0.1, 1.5, 0.01))
+           ("arm_heat", "wiggle", 0.2, 0.95, 0.01), ("tau_s", "wiggle", 0.1, 1.5, 0.01),
+           ("size", "sprite", 0.5, 2.0, 0.05))
+CHECKS = (("sprite", "bob", "bob"), ("sprite", "spin", "spin"),
+          ("aura", "trail", "trail"), ("stars", "enabled", "stars"))
+KEY_DEFAULTS = {"size": 1.0, "bob": True, "spin": True, "trail": True, "enabled": True}
 def user_cfg(path=CFG_PATH):
     try:
         with open(path) as f: return json.load(f)
@@ -54,29 +58,57 @@ def new_state(cfg):
     st.C, st.center = 260.0, (130.0, 130.0)
     st.pixbufs, st.durations, st.total, st.s_time = [], [], 0.0, 0.0
     st.sprite_on = False
+    st.trail = []                       # (t, x, y) preview comet path
+    st.shake = None                     # pending synthetic (t, pt) test-shake queue
     return st
 def all_emotions():
     merged = {}
     for d in (REPO_PACKS, USER_PACKS): merged.update(load_packs(d))
     return merged
+def _seq_files(spec):
+    """seq manifest -> sorted frame files in spec['path'] dir, else []."""
+    d = spec.get("path", "")
+    if not os.path.isdir(d): return []
+    return sorted(f for f in os.listdir(d) if f.lower().endswith((".png", ".webp")))
+def thumb_path(spec):
+    """Any manifest type -> a still image path for the chooser, or None."""
+    t, p = spec.get("type"), spec.get("path", "")
+    if t in ("gif", "png") and os.path.isfile(p): return p
+    if t == "seq":
+        files = _seq_files(spec)
+        if files: return os.path.join(p, files[0])   # f00.png
 def load_sprite(st, name):
     st.pixbufs, st.sprite_on, st.total = [], False, 0.0
     for pack in all_emotions().values():
         spec = pack["emotions"].get(name or "")
-        if spec and spec.get("type") in ("gif", "png") and os.path.isfile(spec.get("path", "")):
+        if not spec: continue
+        t = spec.get("type")
+        if t in ("gif", "png") and os.path.isfile(spec.get("path", "")):
             try: frames, durs = decode_frames(spec["path"])
             except Exception: return
             st.pixbufs = [GdkPixbuf.Pixbuf.new_from_data(
                 f.convert("RGBA").tobytes(), GdkPixbuf.Colorspace.RGB, True, 8,
                 f.width, f.height, f.width * 4) for f in frames]
             st.durations = [max(0.02, x) for x in durs]
-            st.total = float(sum(st.durations))
-            return
+        elif t == "seq":                              # turntable frames, daemon-mirror
+            files = _seq_files(spec)
+            try:
+                st.pixbufs = [GdkPixbuf.Pixbuf.new_from_file(
+                    os.path.join(spec["path"], f)) for f in files]
+            except Exception: return
+            st.durations = [1.0 / spec.get("fps", 24)] * len(st.pixbufs)
+        else: continue
+        st.total = float(sum(st.durations)); return
 def tick_state(st, t, pt):
     """Feed preview-local coords to the REAL WiggleDetector -> heat -> aura."""
+    stars_on = st.cfg.get("stars", {}).get("enabled", True)
     if pt and (st.wig.feed(t, *pt) or st.wig.rev_count != st.rev):
         st.rev = st.wig.rev_count
-        st.stars.burst(t, st.cfg.get("stars", {}).get("per_burst", 10))
+        if stars_on:
+            st.stars.burst(t, st.cfg.get("stars", {}).get("per_burst", 10))
+    if st.cfg.get("aura", {}).get("trail", True) and st.aura.alpha > 0.02 and pt:
+        st.trail.append((t, pt[0], pt[1]))
+    while st.trail and t - st.trail[0][0] > 0.6: st.trail.pop(0)
     st.aura.update(t, st.wig.heat)
     st.sprite_on = st.wig.heat >= st.wig.arm_heat and bool(st.pixbufs)
     if st.sprite_on: st.s_time += 0.016
@@ -117,10 +149,18 @@ def paint(cr, st):
                 acc += d
                 if t < acc: break
             pb = st.pixbufs[min(i, len(st.pixbufs) - 1)]
-            fit = (C * 0.35 * m.scale) / max(pb.get_width(), pb.get_height())
+            sp = st.cfg.get("sprite", {}); now = time.perf_counter()
+            red = st.cfg.get("motion", {}).get("profile") == "reduced"
+            size = C * 0.35 * m.scale * sp.get("size", 1.0)
+            if not red and sp.get("bob", True):
+                size *= 1.0 + 0.03 * math.sin(now * (1.6 + 2.4 * e))
+            cr.save(); cr.translate(cx, cy)
+            if not red and sp.get("spin", True):
+                cr.rotate(math.radians(2.0) * math.sin(now * (0.35 + 0.5 * e)))
+            fit = size / max(pb.get_width(), pb.get_height())
             dw, dh = pb.get_width() * fit, pb.get_height() * fit
-            Gdk.cairo_set_source_pixbuf(cr, pb, cx - dw / 2, cy - dh / 2)
-            cr.paint_with_alpha(a)
+            Gdk.cairo_set_source_pixbuf(cr, pb, -dw / 2, -dh / 2)
+            cr.paint_with_alpha(a); cr.restore()
         n = st.cfg.get("sparkles", 8); now = time.perf_counter()
         for i in range(n):
             ang = now * 0.6 + i * math.tau / n
@@ -130,6 +170,14 @@ def paint(cr, st):
             cr.arc(cx + r * math.cos(ang), cy + r * math.sin(ang) * 0.72,
                    (1.8 + 2 * tw) * C / 512 * (0.7 + 0.6 * e), 0, 2 * math.tau); cr.fill()
     scol = st.cfg.get("stars", {}).get("color", [1, .95, .75]); s = C / 512
+    if st.trail:                                        # fading comet behind aura
+        now = time.perf_counter(); prev = None
+        for (tt, x, y) in st.trail:
+            life = 1.0 - (now - tt) / 0.6
+            if life > 0 and prev:
+                cr.set_line_width(6 * life * a); cr.set_source_rgba(*scol, life * 0.35 * a)
+                cr.move_to(*prev); cr.line_to(x, y); cr.stroke()
+            prev = (x, y)
     for (ang, rad, size, rot, al) in st.stars.stars(time.perf_counter()):
         _star(cr, cx + rad * math.cos(ang) * s, cy + rad * math.sin(ang) * 0.85 * s,
               size * 0.6, rot, al, scol)
@@ -146,7 +194,10 @@ list,row{background:#1c1930;color:#e6e2f5;border-radius:10px} \
 row:selected{background:#3d3468} \
 scale trough{background:#2b2547;border-radius:8px;min-height:6px} \
 scale slider{background:#cabff5;border-radius:8px;min-height:14px;min-width:14px} \
-radiobutton label{color:#e6e2f5}
+radiobutton label{color:#e6e2f5} \
+.accent{color:#f5c9d8;font-weight:bold} \
+button.accent{background:#7b3f6e;border-color:#b56ba0} \
+button.accent:hover{background:#92497f}
 """
 def cls(w, c):
     w.get_style_context().add_class(c); return w
@@ -173,7 +224,11 @@ class Studio(Gtk.Window):
         self.connect("destroy", self._quit)
         self._src = GLib.timeout_add(16, self._tick)     # 60fps preview
         GLib.timeout_add(750, self._poll)                # /proc status dot
+        self.connect("key-press-event", self._key)
         self.show_all()
+    def _key(self, _w, ev):
+        if ev.keyval == Gdk.KEY_Escape: self.close()
+        return False
     def _card(self, title):
         box = cls(Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=6), "card")
         box.pack_start(cls(Gtk.Label(label=title, xalign=0), "title"),
@@ -199,10 +254,13 @@ class Studio(Gtk.Window):
         mo.pack_start(row, False, False, 0)
         self.sliders = {}
         for key, sec, lo, hi, step in SLIDERS:
+            if sec not in ("motion", "wiggle") and key not in self.cfg.get(sec, {}):
+                continue                                  # key not in config.default.json
             r = Gtk.Box(spacing=6)
             r.pack_start(Gtk.Label(label=key, width_request=70, xalign=0), False, False, 0)
             s = Gtk.Scale.new_with_range(Gtk.Orientation.HORIZONTAL, lo, hi, step)
-            s.set_value(self.cfg[sec][key]); s.set_draw_value(False)
+            s.set_value(self.cfg.get(sec, {}).get(key, KEY_DEFAULTS.get(key, lo)))
+            s.set_draw_value(False)
             lab = Gtk.Label(label=f"{s.get_value():.2f}", width_request=40, xalign=1)
             s.connect("value-changed", lambda sc, l=lab: l.set_text(f"{sc.get_value():.2f}"))
             s.connect("button-release-event",
@@ -219,9 +277,21 @@ class Studio(Gtk.Window):
         sw = Gtk.ScrolledWindow(); sw.add(self.packs)
         sw.set_policy("never", "automatic")
         sp.pack_start(sw, True, True, 0)
+        self.checks = {}
+        row = Gtk.Box(spacing=8)
+        for sec, key, label in CHECKS:
+            if key not in self.cfg.get(sec, {}): continue   # defensive: key not documented
+            cb = Gtk.CheckButton.new_with_label(label)
+            cb.set_active(bool(self.cfg.get(sec, {}).get(key, True)))
+            cb.connect("toggled", self._check, sec, key)
+            self.checks[f"{sec}.{key}"] = cb; row.pack_start(cb, False, False, 0)
+        if row.get_children(): sp.pack_start(row, False, False, 0)
         ib = Gtk.Button(label="✦ Import .gif / .png")
         ib.connect("clicked", self._import)
         sp.pack_start(ib, False, False, 0)
+        tb = cls(Gtk.Button(label="✧ Test shake"), "accent")
+        tb.connect("clicked", self._test_shake)
+        sp.pack_start(tb, False, False, 0)
         return sp
     def _preview_card(self):
         box = self._card("✦ Live preview — wiggle here")
@@ -236,7 +306,8 @@ class Studio(Gtk.Window):
         return box
     # behaviour ---------------------------------------------------------------
     def _tick(self):
-        tick_state(self.st, time.perf_counter(), self.mouse)
+        pt = self.st.shake.pop(0) if self.st.shake else self.mouse
+        tick_state(self.st, time.perf_counter(), pt)
         self.da.queue_draw()
         return True
     def _poll(self):
@@ -264,6 +335,12 @@ class Studio(Gtk.Window):
             write_cfg(motion={"profile": name}); self._apply()
     def _slider(self, key, val):
         write_cfg(**{self.sliders[key][1]: {key: round(val, 3)}}); self._apply()
+    def _check(self, cb, sec, key):
+        write_cfg(**{sec: {key: cb.get_active()}}); self._apply()
+    def _test_shake(self, _b):
+        """Queue 0.5s of fast zigzag (at the 16ms tick cadence) through the real detector."""
+        self.st.shake = [(40.0 if i % 2 else 220.0, 110.0 + 40.0 * math.sin(i * 2.1))
+                         for i in range(32)]
     def _refresh_packs(self):
         for c in self.packs.get_children(): self.packs.remove(c)
         self.rows = []

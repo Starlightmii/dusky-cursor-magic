@@ -149,6 +149,8 @@ Paths are relative to the pack directory. The Studio's pack chooser scans
 | `animated` | 18 gif (24–37f) | Fluent Emoji animated APNG→GIF (MIT) |
 | `gloss3d` | 7 png | 3dicons glossy 3D set (CC0) |
 | `spells` | 2 seq (27/35f) | spell_animations sheets, sliced (CC BY 4.0) |
+| `planet3d` / `rune3d` | 60f / 48f seq | procedural planet + rune turntables (`scripts/render3d_planet_rune.py`) |
+| `imported/*` | seq | your own GIFs / frame folders via the studio Import button |
 
 ## How it works
 

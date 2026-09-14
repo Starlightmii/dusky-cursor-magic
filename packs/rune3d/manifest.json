@@ -1,0 +1,12 @@
+{
+  "name": "rune3d",
+  "attribution": "procedural: scripts/render3d_planet_rune.py",
+  "emotions": {
+    "rune": {
+      "type": "seq",
+      "path": "",
+      "frames": 48,
+      "fps": 20
+    }
+  }
+}

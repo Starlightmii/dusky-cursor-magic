@@ -36,8 +36,10 @@ def hypr_socket_path():
     sys.exit("no hyprland socket — run inside Hyprland")
 
 class Daemon:
-    def __init__(self, cfg, demo=None):
+    def __init__(self, cfg, demo=None, cfg_path=None):
         self.cfg, self.demo = cfg, demo
+        self.cfg_path = cfg_path
+        self._cfg_mtime = 0.0
         self.sock_path = hypr_socket_path()
         self.wig = WiggleDetector(**cfg["wiggle"])
         mo = cfg["motion"]
@@ -52,6 +54,14 @@ class Daemon:
         self._demo_t = 0.0 if demo else None
         self.pixbufs, self.durations, self.total, self.pack_time = [], [], 0.0, 0.0
         self.sprite_on = False
+        self.click_fx = []            # (t0, big)  -> ripple + star pop
+        self.trail = []               # (t, x, y)  fading comet behind aura
+        try:
+            from clicks import ClickWatcher
+            self.clicks = ClickWatcher()
+            self.clicks.start(self._on_click)
+        except Exception:
+            self.clicks = None
         self.build_window()
         self.apply_rules()
         GLib.timeout_add(cfg.get("tick_ms", 8), self.tick)
@@ -110,22 +120,95 @@ class Daemon:
             out.update({k: v for k, v in load_packs(d).items()})
         return out
 
-    def show_emotion(self, name):
-        for pack in self.all_emotions().values():
+    def _pixbufs(self, frames, durs):
+        self.pixbufs = [GdkPixbuf.Pixbuf.new_from_data(
+            f.convert("RGBA").tobytes(), GdkPixbuf.Colorspace.RGB, True, 8,
+            f.width, f.height, f.width * 4) for f in frames]
+        self.durations, self.total = durs, float(sum(durs))
+        self.pack_time = 0.0
+
+    def show_emotion(self, name, pack_name=None):
+        for pname, pack in self.all_emotions().items():
+            if pack_name and pname != pack_name:
+                continue
             spec = pack["emotions"].get(name)
-            if spec and spec.get("type") == "gif":
-                frames, dur = decode_frames(spec["path"])
-                self.pixbufs = [GdkPixbuf.Pixbuf.new_from_data(
-                    f.convert("RGBA").tobytes(), GdkPixbuf.Colorspace.RGB, True, 8,
-                    f.width, f.height, f.width * 4) for f in frames]
-                self.durations, self.total, self.pack_time = dur, float(sum(dur)), 0.0
-                return True
+            if not spec:
+                continue
+            t = spec.get("type", "gif")
+            try:
+                if t == "seq":                      # turntable PNG frames
+                    d = spec["path"]
+                    files = sorted(f for f in os.listdir(d)
+                                   if f.lower().endswith((".png", ".webp")))
+                    if not files:
+                        continue
+                    pb = [GdkPixbuf.Pixbuf.new_from_file(os.path.join(d, fn))
+                          for fn in files]
+                    self.pixbufs = pb
+                    fps = spec.get("fps", 24)
+                    self.durations = [1.0 / fps] * len(pb)
+                    self.total = len(pb) / fps
+                    self.pack_time = 0.0
+                    return True
+                frames, dur = decode_frames(spec["path"])   # gif OR single png
+                if frames:
+                    self._pixbufs(frames, [max(0.02, d) for d in dur])
+                    return True
+            except Exception:
+                continue
         return False
 
+    # clicks ------------------------------------------------------------------
+    def _on_click(self, ev):           # worker thread -> queue, drained in tick
+        self._click_q = getattr(self, "_click_q", __import__("collections").deque())
+        self._click_q.append(ev)
+
+    def _drain_clicks(self, now):
+        q = getattr(self, "_click_q", None)
+        while q:
+            try:
+                ev = q.popleft()
+            except IndexError:
+                break
+            if ev["kind"] == "press":
+                self.click_fx.append((now, ev.get("dbl", False)))
+                if self.cfg.get("clicks", {}).get("stars", True):
+                    self.stars.burst(now, 6 if not ev.get("dbl") else 14)
+
     # main loop ---------------------------------------------------------------
+    def hot_reload(self):
+        """Config file is the IPC: ctl window writes, we mtime-poll at ~4Hz."""
+        if not self.cfg_path:
+            return
+        try:
+            mt = os.stat(self.cfg_path).st_mtime
+        except OSError:
+            return
+        if mt == self._cfg_mtime:
+            return
+        self._cfg_mtime = mt
+        old = self.cfg
+        self.cfg = load_config(self.cfg_path)
+        self.disabled = self.cfg.get("disabled", False)
+        if self.cfg.get("wiggle") != old.get("wiggle"):
+            self.wig = WiggleDetector(**self.cfg["wiggle"])
+        mo = self.cfg["motion"]
+        if mo != old.get("motion"):
+            self.aura = AuraMachine(peak_scale=mo["peak_scale"],
+                                    start_scale=mo["start_scale"],
+                                    profile=mo.get("profile", "macos"))
+        if self.disabled and self.win.get_visible():
+            self.win.hide()
+
     def tick(self):
         now = time.perf_counter()
         dt = min(now - self._prev, 0.05); self._prev = now
+        self.hot_reload()
+        self._drain_clicks(now)
+        if getattr(self, "disabled", False):
+            if self.win.get_visible():
+                self.win.hide()
+            return True
         if self._demo_t is not None:
             # synthetic shake: ~9s worth of wiggle compressed into 1s, then calm
             self._demo_t += dt
@@ -151,10 +234,17 @@ class Daemon:
             fired = self.wig.feed(now, *pos)
             if fired:
                 if not self.sprite_on:
-                    name = self.cfg["emotion"]
-                    self.sprite_on = self.show_emotion(name)
+                    self.sprite_on = self.show_emotion(
+                        self.cfg["emotion"], self.cfg.get("sprite_pack") or None)
                     if self.sprite_on:
                         self.aura._peak_heat = self.wig.heat
+            # comet trail: remember recent path while the aura is alive
+            if self.aura.alpha > 0.02:
+                self.trail.append((now, pos[0], pos[1]))
+            while self.trail and now - self.trail[0][0] > 0.6:
+                self.trail.pop(0)
+            del self.click_fx[:max(0, len(self.click_fx) - 8)]
+            self.click_fx = [c for c in self.click_fx if now - c[0] < 0.6]
             # one star burst per reversal pulse while the detector is hot
             self._last_rev = getattr(self, "_last_rev", self.wig.rev_count)
             if self.wig.rev_count != self._last_rev:
@@ -181,6 +271,7 @@ class Daemon:
     def position(self, pos):
         C = self.cfg["canvas_px"]
         ml = max(0, pos[0] - C // 2); mt = max(0, pos[1] - C // 2)
+        self._o = (ml, mt)
         GtkLayerShell.set_margin(self.win, GtkLayerShell.Edge.LEFT, ml)
         GtkLayerShell.set_margin(self.win, GtkLayerShell.Edge.TOP, mt)
         self.center = (pos[0] - ml, pos[1] - mt)
@@ -193,6 +284,9 @@ class Daemon:
         g = self.cfg["glow"]; col = g["color"]
         m, e = self.aura, self.aura.energy
         a = m.alpha
+        if a > 0.003 or self.stars.count or self.click_fx:
+            self._comet(cr)
+            self._click_ripples(cr)
         if a > 0.003:
             es = (m.scale - m.start) / max(0.01, m.peak - m.start)
             cr.set_operator(cairo.OPERATOR_ADD)
@@ -215,6 +309,49 @@ class Daemon:
             self._ring(cr, cx, cy, C, m, col)
         self._starlight(cr, cx, cy, m)
         return False
+
+    def _comet(self, cr):
+        """Fading starlit comet behind the aura — the cursor's tail."""
+        if len(self.trail) < 2:
+            return
+        ox, oy = getattr(self, "_o", (0, 0))
+        now = time.perf_counter()
+        col = self.cfg.get("stars", {}).get("color", [1.0, 0.95, 0.75])
+        cr.set_operator(cairo.OPERATOR_ADD)
+        prev = None
+        for (t, x, y) in self.trail:
+            life = 1.0 - (now - t) / 0.6
+            if life <= 0 or prev is None:
+                prev = (x - ox, y - oy); continue
+            px, py = x - ox, y - oy
+            cr.set_line_width(1.0 + 6.0 * life * self.aura.energy)
+            cr.set_source_rgba(*col, 0.14 * life * self.aura.alpha)
+            cr.move_to(*prev); cr.line_to(px, py); cr.stroke()
+            prev = (px, py)
+
+    def _click_ripples(self, cr):
+        """Click = sonar ripple + twinkle, at the moment of press."""
+        if not self.click_fx:
+            return
+        ox, oy = getattr(self, "_o", (0, 0))
+        now = time.perf_counter()
+        col = self.cfg["glow"]["color"]
+        cr.set_operator(cairo.OPERATOR_ADD)
+        for (t0, dbl) in self.click_fx:
+            age = now - t0
+            if age > 0.6:
+                continue
+            u = age / 0.6
+            cx0, cy0 = self.center
+            for k in range(2 if dbl else 1):
+                uu = max(0.0, u - k * 0.12)
+                if uu <= 0:
+                    continue
+                r = (0.06 + 0.42 * uu) * self.cfg["canvas_px"] * (0.8 if k else 1.0)
+                cr.set_line_width(2.5 * (1.0 - uu))
+                cr.set_source_rgba(*col, (1.0 - uu) * 0.55)
+                cr.arc(cx0, cy0, r, 0, 2 * math.tau)
+                cr.stroke()
 
     def _draw_sprite(self, cr, cx, cy, C, m, a):
         t = self.pack_time % self.total if self.total else 0.0
@@ -298,8 +435,10 @@ class Daemon:
 def main():
     a = sys.argv[1:]
     demo = a[a.index("--demo") + 1] if "--demo" in a and a.index("--demo") + 1 < len(a) else ("random" if "--demo" in a else None)
-    cfg = load_config(a[a.index("-c") + 1] if "-c" in a else None)
-    Daemon(cfg, demo=demo)
+    cp = a[a.index("-c") + 1] if "-c" in a else os.path.expanduser(
+        "~/.config/dusky/cursor-magic/config.json")
+    cfg = load_config(cp)
+    Daemon(cfg, demo=demo, cfg_path=cp)
     Gtk.main()
 
 if __name__ == "__main__":

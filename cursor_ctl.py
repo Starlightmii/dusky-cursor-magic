@@ -1,0 +1,429 @@
+#!/usr/bin/python3
+"""Cursor Soul Studio — control window for the dusky-cursor-magic overlay.
+Contract with the daemon is the config file only (atomic tmp+rename writes;
+daemon hot-reloads on mtime). Live preview runs the real magic_core math.
+Run: /usr/bin/python3 cursor_ctl.py [--selftest]"""
+import gi, json, math, os, shutil, signal, sys, time, types
+import cairo
+gi.require_version("Gtk", "3.0"); gi.require_version("Gdk", "3.0")
+gi.require_version("GdkPixbuf", "2.0")
+from gi.repository import Gtk, Gdk, GdkPixbuf, GLib
+HERE = os.path.dirname(os.path.abspath(__file__))
+sys.path.insert(0, HERE)
+from magic_core import (WiggleDetector, AuraMachine, StarField,
+                        load_packs, decode_frames, load_config)
+
+CFG_PATH = os.path.expanduser("~/.config/dusky/cursor-magic/config.json")
+USER_PACKS = os.path.expanduser("~/.config/dusky/cursor-magic/packs")
+REPO_PACKS = os.path.join(HERE, "packs")
+PIDFILE = "/tmp/magic_ctl.pid"
+PROFILES = ("macos", "snappy", "smooth", "reduced")
+SLIDERS = (("peak_scale", "motion", 1.5, 4.0, 0.05),
+           ("gain", "wiggle", 0.1, 1.0, 0.01),
+           ("arm_heat", "wiggle", 0.2, 0.95, 0.01),
+           ("tau_s", "wiggle", 0.1, 1.5, 0.01))
+
+def user_cfg():
+    try:
+        with open(CFG_PATH) as f:
+            return json.load(f)
+    except Exception:
+        return {}
+
+def write_cfg(**kv):
+    """Atomic merge-write; daemon sees the mtime bump and reloads."""
+    cfg = user_cfg()
+    for k, v in kv.items():
+        if isinstance(v, dict) and isinstance(cfg.get(k), dict):
+            cfg[k].update(v)
+        else:
+            cfg[k] = v
+    os.makedirs(os.path.dirname(CFG_PATH), exist_ok=True)
+    tmp = CFG_PATH + ".tmp"
+    with open(tmp, "w") as f:
+        json.dump(cfg, f, indent=2); f.flush(); os.fsync(f.fileno())
+    os.replace(tmp, CFG_PATH)
+    return cfg
+
+def bump(section, key, val):
+    return write_cfg(**{section: {key: val}})
+
+def pid_alive():
+    try:
+        with open(PIDFILE) as f:
+            os.kill(int(f.read().strip()), 0)
+        return os.path.isdir(f"/proc/{int(open(PIDFILE).read())}")
+    except Exception:
+        return False
+
+# ---- preview state + paint (shared by live window and --selftest) ----------
+
+def new_state(cfg):
+    mo = cfg["motion"]
+    prof = mo.get("profile", "macos")
+    st = types.SimpleNamespace()
+    st.cfg, st.wig = cfg, WiggleDetector(**cfg["wiggle"])
+    st.aura = AuraMachine(peak_scale=mo["peak_scale"],
+                          start_scale=mo["start_scale"], profile=prof)
+    st.stars = StarField(n=cfg.get("stars", {}).get("per_burst", 10))
+    st.rev = st.wig.rev_count
+    st.C = 260.0
+    st.center = (st.C / 2, st.C / 2)
+    st.pixbufs, st.durations, st.total, st.s_time = [], [], 0.0, 0.0
+    st.sprite_on = False
+    return st
+
+def load_sprite(st, name):
+    st.pixbufs, st.sprite_on, st.total = [], False, 0.0
+    if not name:
+        return
+    merged = {}
+    for d in (REPO_PACKS, USER_PACKS):
+        merged.update(load_packs(d))
+    for pack in merged.values():
+        spec = pack["emotions"].get(name)
+        if spec and spec.get("type") in ("gif", "png") and os.path.isfile(spec.get("path", "")):
+            frames, durs = decode_frames(spec["path"])
+            st.pixbufs = [GdkPixbuf.Pixbuf.new_from_data(
+                f.convert("RGBA").tobytes(), GdkPixbuf.Colorspace.RGB, True, 8,
+                f.width, f.height, f.width * 4) for f in frames]
+            st.durations = [max(0.02, x) for x in durs]
+            st.total = float(sum(st.durations))
+            return
+
+def tick_state(st, t, pt):
+    if pt:
+        if st.wig.feed(t, *pt) or st.wig.rev_count != st.rev:
+            st.rev = st.wig.rev_count
+            st.stars.burst(t, st.cfg.get("stars", {}).get("per_burst", 10))
+    st.aura.update(t, st.wig.heat)
+    st.sprite_on = st.wig.heat >= st.wig.arm_heat and bool(st.pixbufs)
+    if st.sprite_on:
+        st.s_time += 0.016
+    return st
+
+def _star(cr, x, y, size, rot, al, col):
+    cr.save(); cr.translate(x, y); cr.rotate(rot)
+    for k in range(8):
+        rr = size if k % 2 == 0 else size * 0.38
+        th = k * math.pi / 4
+        (cr.move_to if k == 0 else cr.line_to)(rr * math.cos(th), rr * math.sin(th))
+    cr.close_path(); cr.set_source_rgba(*col, al); cr.fill()
+    cr.arc(0, 0, size * 0.28, 0, 2 * math.tau)
+    cr.set_source_rgba(1, 1, 1, al * 0.9); cr.fill(); cr.restore()
+
+def paint(cr, st):
+    C = st.C; cx, cy = st.center
+    g = st.cfg["glow"]; col = g["color"]; m = st.aura; a, e = m.alpha, m.energy
+    cr.set_operator(cairo.OPERATOR_OVER); cr.set_source_rgb(0.05, 0.045, 0.08); cr.paint()
+    cr.set_operator(cairo.OPERATOR_ADD)
+    if a > 0.003:
+        es = (m.scale - m.start) / max(0.01, m.peak - m.start)
+        R = g["outer_r"] * C * (0.45 + 0.55 * es) * (0.6 + 0.4 * e)
+        gr = cairo.RadialGradient(cx, cy, 0, cx, cy, R)
+        gr.add_color_stop_rgba(0.00, *col, g["soft_alpha"] * a * (0.6 + 0.4 * e))
+        gr.add_color_stop_rgba(0.45, *col, g["soft_alpha"] * 0.5 * a)
+        gr.add_color_stop_rgba(0.80, *col, g["soft_alpha"] * 0.12 * a)
+        gr.add_color_stop_rgba(1.00, *col, 0.0)
+        cr.set_source(gr); cr.paint()
+        r2 = 0.30 * C * (0.45 + 0.55 * es)
+        gr2 = cairo.RadialGradient(cx, cy, 0, cx, cy, r2)
+        gr2.add_color_stop_rgba(0.0, 1, 1, 1, g["inner_alpha"] * 0.7 * a)
+        gr2.add_color_stop_rgba(1.0, *col, 0.0)
+        cr.set_source(gr2); cr.paint()
+        if st.sprite_on and st.pixbufs:
+            _sprite(cr, st, cx, cy, m, a)
+        for i in range(st.cfg.get("sparkles", 8)):          # daemon _particles, C-scaled
+            ang = time.perf_counter() * 0.6 + i * math.tau / st.cfg.get("sparkles", 8)
+            r = 150 * C / 512 * (1 + 0.2 * math.sin(i * 2.1)) * (0.5 + 0.5 * es)
+            px = cx + r * math.cos(ang); py = cy + r * math.sin(ang) * 0.72
+            tw = 0.5 + 0.5 * math.sin(i * 1.7)
+            cr.set_source_rgba(1, .93, .99, a * .4 * (.5 + .5 * e))
+            cr.arc(px, py, 2.2 * (0.7 + 0.6 * e), 0, 2 * math.tau); cr.fill()
+    scol = st.cfg.get("stars", {}).get("color", [1, .95, .75])
+    for (ang, rad, size, rot, al) in st.stars.stars(time.perf_counter()):
+        _star(cr, cx + rad * math.cos(ang) * (C / 512), cy + rad * math.sin(ang) * 0.85 * (C / 512),
+              size * 0.6, rot, al, scol)
+    cr.set_operator(cairo.OPERATOR_OVER)
+
+def _sprite(cr, st, cx, cy, m, a):
+    t = st.s_time % st.total if st.total else 0.0
+    acc = 0.0; i = 0
+    for i, d in enumerate(st.durations):
+        acc += d
+        if t < acc: break
+    pb = st.pixbufs[min(i, len(st.pixbufs) - 1)]
+    fit = (st.C * 0.35 * m.scale) / max(pb.get_width(), pb.get_height())
+    dw, dh = pb.get_width() * fit, pb.get_height() * fit
+    Gdk.cairo_set_source_pixbuf(cr, pb, cx - dw / 2, cy - dh / 2)
+    cr.paint_with_alpha(a)
+
+# ---- window ----------------------------------------------------------------
+
+CSS = b"""
+window{background:#141220;color:#e6e2f5;font-family:sans-serif}
+.card{background:#1c1930;border:1px solid #322c52;border-radius:14px;padding:10px}
+.title{font-size:15px;font-weight:bold;color:#cabff5}
+.hint{color:#8f86b8;font-size:11px}
+button{background:#2b2547;color:#e6e2f5;border:1px solid #4a3f7a;border-radius:12px;padding:8px;font-size:13px}
+button:hover{background:#372f5c}
+list, row{background:#1c1930;color:#e6e2f5;border-radius:10px}
+row:selected{background:#3d3468}
+scale trough{background:#2b2547;border-radius:8px;min-height:6px}
+scale slider{background:#cabff5;border-radius:8px;min-height:14px;min-width:14px}
+radiobutton label{color:#e6e2f5}
+"""
+
+class Studio(Gtk.Window):
+    def __init__(self):
+        super().__init__(title="✦ Cursor Soul Studio ✦")
+        self.cfg = load_config(CFG_PATH)
+        self.st = new_state(self.cfg)
+        self.set_default_size(720, 560)
+        self.set_resizable(False)
+        self._apply_css()
+        root = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=10, margin=12)
+        self.add(root)
+        root.pack_start(self._header(), False, False, 0)
+        body = Gtk.Box(spacing=10); root.pack_start(body, True, True, 0)
+        body.pack_start(self._controls(), False, False, 0)
+        body.pack_start(self._preview_box(), False, False, 0)
+        self._refresh_packs()
+        load_sprite(self.st, self.cfg.get("emotion"))
+        self.connect("destroy", self._quit)
+        self._src = GLib.timeout_add(16, self._tick)
+        GLib.timeout_add(750, self._poll)
+        self.show_all()
+
+    def _apply_css(self):
+        pr = Gtk.CssProvider(); pr.load_from_data(CSS)
+        Gtk.StyleContext.add_provider_for_screen(
+            Gdk.Screen.get_default(), pr, Gtk.STYLE_PROVIDER_PRIORITY_APPLICATION)
+
+    def _header(self):
+        box = Gtk.Box(spacing=10)
+        self.dot = Gtk.Label(label="●")
+        self.toggle = Gtk.Button(label="Wake the magic")
+        self.toggle.connect("clicked", self._on_toggle)
+        box.pack_start(self.dot, False, False, 0)
+        box.pack_start(self.toggle, False, False, 0)
+        box.pack_start(Gtk.Label(label="  shake the preview — the aura is alive",
+                                 css_classes=["hint"]), True, True, 0)
+        return box
+
+    def _card(self, title):
+        box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=6,
+                      css_classes=["card"])
+        box.pack_start(Gtk.Label(label=title, xalign=0, css_classes=["title"]),
+                       False, False, 0)
+        return box
+
+    def _controls(self):
+        col = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=10)
+        mo = self._card("✧ Motion")
+        row = Gtk.Box(spacing=8)
+        self.radios = {}
+        for p in PROFILES:
+            r = Gtk.RadioButton.new_with_label_from_widget(self.radios.get("macos"), p)
+            r.set_active(self.cfg["motion"].get("profile") == p)
+            r.connect("toggled", self._profile, p)
+            self.radios[p] = r; row.pack_start(r, False, False, 0)
+        mo.pack_start(row, False, False, 0)
+        self.slabs = {}
+        for key, sec, lo, hi, step in SLIDERS:
+            r = Gtk.Box(spacing=6)
+            r.pack_start(Gtk.Label(label=key, width_request=64, xalign=0), False, False, 0)
+            s = Gtk.Scale.new_with_range(Gtk.Orientation.HORIZONTAL, lo, hi, step)
+            s.set_value(self.cfg[sec][key]); s.set_draw_value(False)
+            lab = Gtk.Label(label=f"{s.get_value():.2f}", width_request=40, xalign=1)
+            s.connect("value-changed", lambda sc, l=lab, k=key: l.set_text(f"{sc.get_value():.2f}"))
+            s.connect("button-release-event", lambda w, e, k=key, sc=s: self._slider(k, sc.get_value()))
+            self.slabs[key] = (s, sec)
+            r.pack_start(s, True, True, 0); r.pack_start(lab, False, False, 0)
+            mo.pack_start(r, False, False, 0)
+        col.pack_start(mo, False, False, 0)
+        sp = self._card("☾ Soul sprite")
+        self.packs = Gtk.ListBox()
+        self.packs.set_size_request(280, 200)
+        sw = Gtk.ScrolledWindow(); sw.add(self.packs); sw.set_policy("never", "automatic")
+        sp.pack_start(sw, True, True, 0)
+        ib = Gtk.Button(label="✦ Import .gif / .png")
+        ib.connect("clicked", self._import)
+        sp.pack_start(ib, False, False, 0)
+        col.pack_start(sp, True, True, 0)
+        return col
+
+    def _preview_box(self):
+        box = self._card("✦ Live preview — wiggle here")
+        eb = Gtk.EventBox()
+        self.da = Gtk.DrawingArea()
+        self.da.set_size_request(260, 260)
+        self.da.connect("draw", self._draw)
+        eb.add(self.da)
+        eb.add_events(Gdk.EventMask.POINTER_MOTION_MASK
+                      | Gdk.EventMask.LEAVE_NOTIFY_MASK)
+        eb.connect("motion-notify-event", self._motion)
+        eb.connect("leave-notify-event", lambda *_: setattr(self, "mouse", None))
+        self.mouse = None
+        box.pack_start(eb, False, False, 0)
+        return box
+
+    def _motion(self, _w, ev):
+        self.mouse = (ev.x, ev.y)
+
+    # behaviour -------------------------------------------------------------
+    def _draw(self, _w, cr):
+        paint(cr, self.st)
+        return False
+
+    def _tick(self):
+        tick_state(self.st, time.perf_counter(), self.mouse)
+        self.da.queue_draw()
+        return True
+
+    def _poll(self):
+        up = pid_alive()
+        self.dot.override_color(Gtk.StateFlags.NORMAL,
+                                Gdk.RGBA(0.55, 0.9, 0.6, 1) if up else Gdk.RGBA(0.85, 0.4, 0.5, 1))
+        self.toggle.set_label("Put the spell to sleep" if up else "Wake the magic")
+        return True
+
+    def _on_toggle(self, _b):
+        if pid_alive():                                   # OFF: our pidfile only
+            with open(PIDFILE) as f:
+                os.kill(int(f.read().strip()), signal.SIGTERM)
+            os.remove(PIDFILE)
+            write_cfg(disabled=True)
+        else:                                             # ON: enable + launch detached
+            write_cfg(disabled=False)
+            proc = subprocess_run_daemon()
+            with open(PIDFILE, "w") as f:
+                f.write(str(proc.pid))
+
+    def _profile(self, btn, name):
+        if btn.get_active():
+            self.cfg = bump("motion", "profile", name)
+            self.st = new_state(self.cfg); load_sprite(self.st, self.cfg.get("emotion"))
+
+    def _slider(self, key, val):
+        sec = self.slabs[key][1]
+        self.cfg = bump(sec, key, round(val, 3))
+        self.st = new_state(self.cfg); load_sprite(self.st, self.cfg.get("emotion"))
+
+    def _refresh_packs(self):
+        for c in self.packs.get_children():
+            self.packs.remove(c)
+        self.rows = []
+        merged = {}
+        for d in (REPO_PACKS, USER_PACKS):
+            merged.update(load_packs(d))
+        for pname, pack in merged.items():
+            for emo, spec in pack.get("emotions", {}).items():
+                pb = None
+                if spec.get("type") in ("gif", "png") and os.path.isfile(spec.get("path", "")):
+                    try:
+                        full = GdkPixbuf.Pixbuf.new_from_file(spec["path"])
+                        pb = full.scale_simple(48, 48, GdkPixbuf.InterpType.BILINEAR)
+                    except Exception:
+                        pass
+                row = Gtk.ListBoxRow()
+                rb = Gtk.Box(spacing=8)
+                img = Gtk.Image()
+                if pb: img.set_from_pixbuf(pb)
+                else: img.set_from_icon_name("image-x-generic", Gtk.IconSize.BUTTON)
+                rb.pack_start(img, False, False, 0)
+                rb.pack_start(Gtk.Label(label=f"{emo}  ·  {pname}"), False, False, 0)
+                row.add(rb); self.packs.add(row)
+                self.rows.append((emo, pname))
+        self.packs.show_all()
+        self.packs.connect("row-activated", self._pick)
+        for i, (emo, _) in enumerate(self.rows):
+            if emo == self.cfg.get("emotion"):
+                self.packs.select_row(self.packs.get_row_at_index(i))
+
+    def _pick(self, _lb, row):
+        emo, pname = self.rows[row.get_index()]
+        write_cfg(emotion=emo, sprite_pack=pname)
+        self.cfg = load_config(CFG_PATH)
+        load_sprite(self.st, emo)
+
+    def _import(self, _b):
+        fc = Gtk.FileChooserDialog(title="Import a sprite", transient_for=self,
+                                   action=Gtk.FileChooserAction.OPEN)
+        fc.add_buttons("Cancel", Gtk.ResponseType.CANCEL, "Import", Gtk.ResponseType.OK)
+        for pat, name in (("*.gif", "GIF"), ("*.png", "PNG")):
+            f = Gtk.FileFilter(); f.add_pattern(pat); f.set_name(name); fc.add_filter(f)
+        if fc.run() == Gtk.ResponseType.OK:
+            src = fc.get_filename()
+            ext = os.path.splitext(src)[1].lower().lstrip(".")
+            if src and ext in ("gif", "png"):
+                stem = os.path.splitext(os.path.basename(src))[0]
+                d = os.path.join(USER_PACKS, "imported", stem)
+                os.makedirs(d, exist_ok=True)
+                dst = os.path.join(d, os.path.basename(src))
+                if os.path.abspath(src) != os.path.abspath(dst):
+                    shutil.copy2(src, dst)
+                base = os.path.join(USER_PACKS, "imported")
+                mf = os.path.join(base, "manifest.json")
+                m = {"emotions": {}}
+                if os.path.isfile(mf):
+                    with open(mf) as f: m = json.load(f)
+                m.setdefault("emotions", {})[stem] = {"type": ext, "path": f"{stem}/{os.path.basename(src)}"}
+                tmp = mf + ".tmp"
+                with open(tmp, "w") as f: json.dump(m, f, indent=1)
+                os.replace(tmp, mf)
+                self._refresh_packs()
+        fc.destroy()
+
+    def _quit(self, *_):
+        if self._src: GLib.source_remove(self._src)
+        Gtk.main_quit()
+
+def subprocess_run_daemon():
+    import subprocess
+    log = open("/tmp/magic_ctl.log", "ab")
+    return subprocess.Popen(["setsid", "/usr/bin/python3",
+                             os.path.join(HERE, "cursor_magic.py")],
+                            stdout=log, stderr=log)
+
+# ---- selftest ----------------------------------------------------------------
+
+def selftest():
+    cfg = load_config(CFG_PATH)
+    print("OK config loaded")
+    merged = {}
+    for d in (REPO_PACKS, USER_PACKS):
+        merged.update(load_packs(d))
+    emos = sorted({e for p in merged.values() for e in p.get("emotions", {})})
+    print(f"OK packs: {sorted(merged)} emotions: {emos}")
+    st = new_state(cfg)
+    load_sprite(st, cfg.get("emotion"))
+    t = 1000.0
+    x, y = 130.0, 130.0
+    for _ in range(30):                                # a violent wiggle
+        for _ in range(6):
+            x += 60; t += 0.016
+            tick_state(st, t, (x, y))
+        x -= 360
+        for _ in range(6):
+            t += 0.016
+            tick_state(st, t, (x, y))
+    assert st.wig.heat > 0.3, f"wiggle produced no heat: {st.wig.heat}"
+    assert st.aura.scale > st.aura.start + 0.5, f"aura flat: {st.aura.scale}"
+    assert st.stars.count > 0, "no stars burst"
+    print(f"OK wiggle heat={st.wig.heat:.2f} aura_scale={st.aura.scale:.2f} stars={st.stars.count}")
+    surf = cairo.ImageSurface(cairo.FORMAT_ARGB32, 260, 260)
+    paint(cairo.Context(surf), st)
+    surf.write_to_png("/tmp/ctl_selftest.png")
+    print("OK offscreen frame")
+    print("OK selftest passed")
+    return 0
+
+def main():
+    if "--selftest" in sys.argv[1:]:
+        sys.exit(selftest())
+    Studio()
+    Gtk.main()
+
+if __name__ == "__main__":
+    main()

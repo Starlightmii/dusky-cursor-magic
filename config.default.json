@@ -1,7 +1,7 @@
 {
   "wiggle": {"window_s": 0.35, "min_speed": 900.0, "need": 2,
-             "tau_s": 0.30, "gain": 0.45, "reversal_speed": 4000.0, "arm_heat": 0.55},
-  "motion": {"profile": "macos", "peak_scale": 2.2, "start_scale": 0.35},
+             "tau_s": 0.42, "gain": 0.45, "reversal_speed": 4000.0, "arm_heat": 0.55},
+  "motion": {"profile": "macos", "peak_scale": 3.0, "start_scale": 0.35},
   "stars":  {"per_burst": 10, "color": [1.0, 0.95, 0.75]},
   "canvas_px": 512,
   "glow": {"color": [0.78, 0.82, 1.0], "soft_alpha": 0.10, "inner_alpha": 0.16,

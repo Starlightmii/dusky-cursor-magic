@@ -39,7 +39,8 @@ class WiggleDetector:
     deposits gain * min(1, speed/reversal_speed) into .heat; heat decays
     exponentially (tau_s). .fired pulses once per burst past arm_heat."""
     def __init__(self, window_s=0.35, min_speed=900.0, need=2,
-                 tau_s=0.30, gain=0.45, reversal_speed=4000.0, arm_heat=0.55):
+                 tau_s=0.42, gain=0.45, reversal_speed=4000.0, arm_heat=0.55):
+        # tau 0.42 ≈ kwin's 2s hold: heat visibly sustains ~1.5s after last shake
         self.window_s, self.min_speed, self.need = window_s, min_speed, need
         self.tau_s, self.gain, self.rs = tau_s, gain, reversal_speed
         self.arm_heat = arm_heat
@@ -85,9 +86,12 @@ class AuraMachine:
     start + (peak-start)*heat with zero steady-state error and no overshoot
     pop — butter growing AND shrinking, alive like macOS."""
     PROFILES = {
-        "macos":   {"peak": 2.2, "start": 0.35, "k": 180.0, "zeta": 0.9},
-        "smooth":  {"peak": 2.0, "start": 0.4,  "k": 90.0,  "zeta": 1.0},
-        "snappy":  {"peak": 2.4, "start": 0.3,  "k": 300.0, "zeta": 0.85},
+        # kwin shakecursor (the only faithful macOS clone in source): 3x mag,
+        # 2s hold before deflate. Spring equivalents below (continuous heat
+        # replaces kwin's discrete +1x re-magnify, so no separate boost needed).
+        "macos":   {"peak": 3.0, "start": 0.35, "k": 180.0, "zeta": 0.9},
+        "smooth":  {"peak": 2.6, "start": 0.4,  "k": 90.0,  "zeta": 1.0},
+        "snappy":  {"peak": 3.2, "start": 0.3,  "k": 300.0, "zeta": 0.85},
         "reduced": {"peak": 1.0, "start": 1.0,  "k": 120.0, "zeta": 1.0},
     }
 

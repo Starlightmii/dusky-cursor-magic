@@ -186,9 +186,14 @@ class Stars:
                    speed=1.6)
 
     def _add(self, t, ang, spd, size, life, spin, tw, x, y, drift):
-        self._s.append((t, ang, spd, size, life, spin, tw, (x, y), drift))
+        # asymptotic travel ≈ spd*0.31 over a star's life; clamp 500 → ≤155px
+        # so every star FADES before the 160px half-window edge — the blast
+        # lives in open space, not a box. Normal-burst ring max is 450 (kept)
+        # so a supernova (raw spd ~1000, clamped 500) still outruns a click.
+        self._s.append((t, ang, min(spd, 500.0), size, life, spin, tw,
+                        (x, y), drift))
 
-    def live(self, t, org=(0.0, 0.0), half=110.0):
+    def live(self, t, org=(0.0, 0.0), half=160.0):
         """[(x, y, size, rot, alpha)] in field coords (canvas px, centre-
         relative). Stars store SCREEN px — the galaxy stays put while the
         overlay window chases the pointer. Twinkle = per-star rate + a
@@ -291,9 +296,10 @@ class Aura:
         for (x, y, age, s, exp) in ripples:
             if 0.0 <= age < RIPPLE_LIFE:
                 uu = age / RIPPLE_LIFE
-                # shared endpoint R0*6 at u=1; exp<1 = violent breakout that
-                # decelerates (u^0.4 leads linear by 1.44x at half-life)
-                rr = self.R0 * 6.0 * (uu ** exp)
+                # endpoint R0*4.2 = 143px < half-window (160): rings fade out
+                # on their own INSIDE the field — no edge pin, no hidden box.
+                # exp<1 = Sedov-Taylor blast, exp=1 = linear click ring
+                rr = self.R0 * 4.2 * (uu ** exp)
                 band = np.exp(-(((np.hypot(self.gx - x * self.SCALE,
                                            self.gy - y * self.SCALE) - rr)
                                  / (self.R0 * 0.18)) ** 2))
@@ -365,7 +371,7 @@ def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--test", action="store_true",
                     help="self-check the speed-grows-size physics, print PASS/FAIL, exit")
-    ap.add_argument("--canvas", type=int, default=256)
+    ap.add_argument("--canvas", type=int, default=320)
     ap.add_argument("--radius", type=float, default=34.0)
     ap.add_argument("--strength", type=float, default=1.0)
     ap.add_argument("--fps", type=float, default=60.0)

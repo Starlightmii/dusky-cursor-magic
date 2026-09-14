@@ -3,7 +3,7 @@
 Contract with the daemon is the config file only (atomic tmp+rename writes;
 daemon hot-reloads on mtime). Live preview runs the real magic_core math.
 Run: /usr/bin/python3 cursor_ctl.py [--selftest]"""
-import gi, json, math, os, shutil, signal, subprocess, sys, time, types
+import gi, json, math, os, shutil, signal, subprocess, sys, threading, time, types
 import cairo
 gi.require_version("Gtk", "3.0"); gi.require_version("Gdk", "3.0")
 gi.require_version("GdkPixbuf", "2.0")
@@ -401,6 +401,46 @@ class Studio(Gtk.Window):
         d = Gtk.MessageDialog(transient_for=self, modal=True, text=msg,
                               buttons=Gtk.ButtonsType.OK, message_type=Gtk.MessageType.ERROR)
         d.run(); d.destroy()
+    def _import_model(self):
+        """3D model -> turntable seq pack, rendered OFF the UI thread by
+        scripts/render3d_model.py in .venv-render (a 48f turntable is ~40s of
+        CPU painter — freezing the window for that is unacceptable)."""
+        fc = Gtk.FileChooserDialog(title="Import a 3D model", transient_for=self,
+                                   action=Gtk.FileChooserAction.OPEN)
+        fc.add_buttons("Cancel", Gtk.ResponseType.CANCEL, "Render turntable", Gtk.ResponseType.OK)
+        flt = Gtk.FileFilter()
+        for pat in ("*.glb", "*.gltf", "*.obj"): flt.add_pattern(pat)
+        flt.set_name("3D models"); fc.add_filter(flt)
+        src = fc.get_filename() if fc.run() == Gtk.ResponseType.OK else None
+        fc.destroy()
+        if not src: return
+        stem = os.path.splitext(os.path.basename(src))[0][:24].replace(" ", "-").lower()
+        py = os.path.join(HERE, ".venv-render", "bin", "python")
+        if not os.path.exists(py):
+            self._error("Render env missing. Create: uv venv .venv-render && "
+                        "uv pip install -p .venv-render/bin/python trimesh numpy pillow"); return
+        self.set_title(f"Cursor Studio — rendering {stem} …")
+        def work():
+            packdir = os.path.join(REPO_PACKS, "imported")
+            r = subprocess.run([py, os.path.join(HERE, "scripts", "render3d_model.py"),
+                                src, "--pack", packdir, "--name", stem,
+                                "--attribution", f"model {os.path.basename(src)}, user import"],
+                               capture_output=True, text=True)
+            err = "" if r.returncode == 0 else (r.stderr or r.stdout).strip()[:200]
+            if not err:                            # mirror frames into the runtime copy
+                try:
+                    shutil.copytree(os.path.join(packdir, stem),
+                                    os.path.join(USER_PACKS, "imported", stem), dirs_exist_ok=True)
+                    shutil.copy2(os.path.join(packdir, "manifest.json"),
+                                 os.path.join(USER_PACKS, "imported", "manifest.json"))
+                except OSError as e: err = f"mirror: {e}"
+            GLib.idle_add(self._model_done, stem, err)
+        threading.Thread(target=work, daemon=True).start()
+    def _model_done(self, stem, err):
+        self.set_title("Cursor Studio — Dusky Cursor Magic")
+        if err: self._error("Turntable render failed: " + err)
+        else: self._refresh_packs()
+        return False
     def _import_frames(self, fc):
         """Frame-folder import: dir of PNGs -> imported/<stem>/ seq pack.
         Uses build_pack's slicer primitives if present; here plain renumber."""
@@ -429,13 +469,16 @@ class Studio(Gtk.Window):
     def _import(self, _b):
         menu = Gtk.Menu()
         for label, act in (("Single .gif / .png", Gtk.FileChooserAction.OPEN),
-                           ("Frame folder (PNG seq)", Gtk.FileChooserAction.SELECT_FOLDER)):
+                           ("Frame folder (PNG seq)", Gtk.FileChooserAction.SELECT_FOLDER),
+                           ("3D model (.glb/.gltf/.obj)", "MODEL")):
             it = Gtk.MenuItem.new_with_label(label)
             it.connect("activate", self._import_pick, act)
             menu.append(it)
         menu.show_all()
         menu.popup_at_widget(_b, Gdk.Gravity.SOUTH, Gdk.Gravity.NORTH, None)
     def _import_pick(self, _item, action):
+        if action == "MODEL":       # real 3D -> turntable pack (no Gtk enum for this)
+            self._import_model(); return
         fc = Gtk.FileChooserDialog(title="Import a sprite", transient_for=self,
                                    action=action)
         fc.add_buttons("Cancel", Gtk.ResponseType.CANCEL, "Import", Gtk.ResponseType.OK)

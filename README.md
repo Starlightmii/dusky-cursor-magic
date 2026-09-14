@@ -152,6 +152,7 @@ Paths are relative to the pack directory. The Studio's pack chooser scans
 | `planet3d` / `rune3d` | 60f / 48f seq | procedural planet + rune turntables (`scripts/render3d_planet_rune.py`) |
 | `imported/*` | seq | your own GIFs / frame folders via the studio Import button |
 | `fox3d` | 60f seq | **real glTF model** (CC BY, Khronos samples) → turntable via `scripts/render3d_model.py` |
+| `avo3d` / `boombox3d` | 48f seq | **real glTF models** (CC0, Khronos samples) → turntable, incl. quadric decimation for heavy meshes |
 
 ## How it works
 

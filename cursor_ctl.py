@@ -377,10 +377,46 @@ class Studio(Gtk.Window):
         d = Gtk.MessageDialog(transient_for=self, modal=True, text=msg,
                               buttons=Gtk.ButtonsType.OK, message_type=Gtk.MessageType.ERROR)
         d.run(); d.destroy()
+    def _import_frames(self, fc):
+        """Frame-folder import: dir of PNGs -> imported/<stem>/ seq pack.
+        Uses build_pack's slicer primitives if present; here plain renumber."""
+        src = fc.get_filename() if fc.run() == Gtk.ResponseType.OK else None
+        fc.destroy()
+        if not src or not os.path.isdir(src): return
+        files = sorted(f for f in os.listdir(src)
+                       if f.lower().endswith((".png", ".webp")))
+        if len(files) < 4:
+            self._error(f"Need >=4 PNG frames, found {len(files)}."); return
+        stem = os.path.basename(os.path.normpath(src))
+        for d in (os.path.join(REPO_PACKS, "imported"),
+                  os.path.join(USER_PACKS, "imported")):
+            dst = os.path.join(d, stem)
+            os.makedirs(dst, exist_ok=True)
+            for i, fn in enumerate(files):
+                shutil.copy2(os.path.join(src, fn),
+                             os.path.join(dst, f"f{i:03d}" + os.path.splitext(fn)[1]))
+            mf = os.path.join(d, "manifest.json")
+            m = user_cfg(mf); m.setdefault("emotions", {})[stem] = \
+                {"type": "seq", "path": f"{stem}/", "frames": len(files), "fps": 20}
+            tmp = mf + ".tmp"
+            with open(tmp, "w") as f: json.dump(m, f, indent=1)
+            os.replace(tmp, mf)
+        self._refresh_packs()
     def _import(self, _b):
+        menu = Gtk.Menu()
+        for label, act in (("Single .gif / .png", Gtk.FileChooserAction.OPEN),
+                           ("Frame folder (PNG seq)", Gtk.FileChooserAction.SELECT_FOLDER)):
+            it = Gtk.MenuItem.new_with_label(label)
+            it.connect("activate", self._import_pick, act)
+            menu.append(it)
+        menu.show_all()
+        menu.popup_at_widget(_b, Gdk.Gravity.SOUTH, Gdk.Gravity.NORTH, None)
+    def _import_pick(self, _item, action):
         fc = Gtk.FileChooserDialog(title="Import a sprite", transient_for=self,
-                                   action=Gtk.FileChooserAction.OPEN)
+                                   action=action)
         fc.add_buttons("Cancel", Gtk.ResponseType.CANCEL, "Import", Gtk.ResponseType.OK)
+        if action == Gtk.FileChooserAction.SELECT_FOLDER:
+            self._import_frames(fc); return
         for pat in ("*.gif", "*.png"):
             f = Gtk.FileFilter(); f.add_pattern(pat); f.set_name(pat); fc.add_filter(f)
         src = fc.get_filename() if fc.run() == Gtk.ResponseType.OK else None

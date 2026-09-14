@@ -24,8 +24,8 @@ N_FRAMES = 24
 FOCAL, CAM_Z, PPU = 5.0, 9.0, 135.0       # persp strength, camera z, px/unit
 TILT = -0.16                              # fixed x-tilt: shows top bevel, 3/4 view
 R_OUT, R_IN, HZ = 1.0, 0.30, 0.12         # star outer/inner radius, half-thick
-GEM = (0.0, 0.34, HZ + 0.001)             # chibi highlight diamond, off-center
-GEM_R = 0.16
+GEM = (0.22, 0.22, HZ + 0.001)            # chibi highlight diamond, off-axis
+GEM_R = 0.14
 BASE = (148, 108, 216)                    # amethyst face
 GLOW = (196, 150, 255)                    # bloom tint
 L = (0.45, -0.55, 0.70)              # key light (upper-left, toward cam)
@@ -107,6 +107,15 @@ def render_frame(i):
     polys.sort(key=lambda t: t[0])            # painter: far (-z) first
     for _, pts, col in polys:
         d.polygon(pts, fill=col + (255,), outline=col + (255,))
+    # chibi gem on the front face (only while the face points at camera)
+    gn = yaw([(0, 0, 1)], th)[0]
+    if gn[2] > 0.05:
+        gx, gy, gz = GEM
+        pts2 = [(gx + GEM_R * math.cos(a), gy + GEM_R * math.sin(a), gz)
+                for a in (0, math.pi / 2, math.pi, 3 * math.pi / 2)]
+        sp = [(x, y) for x, y, _ in map(project, yaw(pts2, th))]
+        k = 0.55 + 0.45 * max(0.0, gn[2])
+        d.polygon(sp, fill=tuple(min(255, 110 + int(c * k)) for c in (235, 215, 255)) + (255,))
     # rim light: stroke the front face silhouette
     sil = [(x, y) for x, y, _ in map(project, yaw([(*xy, HZ) for xy in RING], th))]
     d.polygon(sil, outline=(235, 215, 255, 170), width=2 * SS)

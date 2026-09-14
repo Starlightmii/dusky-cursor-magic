@@ -71,5 +71,12 @@
   "ripples": true
  },
  "disabled": false,
- "sprite_pack": ""
+ "sprite_pack": "",
+ "soul": {
+  "on": true,
+  "grow": 1.2,
+  "glow": 0.5,
+  "radius": 34.0,
+  "strength": 1.0
+ }
 }

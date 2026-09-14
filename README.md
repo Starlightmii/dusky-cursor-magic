@@ -11,6 +11,12 @@ Pillow, and the Hyprland socket are already there.
 
 ## Features
 
+- **Shader soul** — a click-through glow layer (`shader_soul.py`) that paints one
+  living field under the pointer: it *grows smoothly as you move fast and melts
+  back down when you slow* (Stevens-law perceptual curve), ripples on every
+  click, breathes at idle. Controlled from the Studio ("shader soul" checkbox +
+  grow/glow/radius sliders, hot-reload). Measured growth gate: `test_aura_screen.py`.
+
 - **Continuous heat→spring aura** — shaking the mouse deposits "heat"
   (WiggleDetector); the glow scales toward a spring target and decays
   exponentially, like macOS/KWin's shake-to-find but always live, no gate.

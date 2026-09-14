@@ -21,11 +21,16 @@ SLIDERS = (("peak_scale", "motion", 1.5, 4.0, 0.05), ("gain", "wiggle", 0.1, 1.0
            ("size", "sprite", 0.5, 2.0, 0.05),
            ("max_gain", "ambient", 0.0, 0.8, 0.05),
            ("base", "playback", 1.0, 2.0, 0.05),
-           ("cap", "playback", 1.0, 2.5, 0.05))
+           ("cap", "playback", 1.0, 2.5, 0.05),
+           ("grow", "soul", 0.4, 2.0, 0.05),
+           ("glow", "soul", 0.2, 0.9, 0.02),
+           ("radius", "soul", 16.0, 64.0, 1.0))
+SOUL_PIDFILE = os.path.expanduser("~/.cache/cursor-magic/soul.pid")
 CHECKS = (("sprite", "bob", "bob"), ("sprite", "spin", "spin"),
           ("aura", "trail", "trail"), ("stars", "enabled", "stars"),
           ("ambient", "on", "whisper"), ("ambient", "idle_shimmer", "shimmer"),
-          ("playback", "on", "alive spin"))
+          ("playback", "on", "alive spin"),
+          ("soul", "on", "shader soul"))
 KEY_DEFAULTS = {"size": 1.0, "bob": True, "spin": True, "trail": True,
                 "enabled": True, "on": True, "idle_shimmer": True,
                 "max_gain": 0.35}
@@ -367,7 +372,28 @@ class Studio(Gtk.Window):
     def _slider(self, key, val):
         write_cfg(**{self.sliders[key][1]: {key: round(val, 3)}}); self._apply()
     def _check(self, cb, sec, key):
-        write_cfg(**{sec: {key: cb.get_active()}}); self._apply()
+        write_cfg(**{sec: {key: cb.get_active()}})
+        if sec == "soul": self._soul(cb.get_active())
+        self._apply()
+    def _soul(self, want_on):
+        """Shader aura layer lifecycle: one process, one pidfile — same
+        discipline as the sprite daemon. Off = kill it, not idle-spin it."""
+        try:
+            with open(SOUL_PIDFILE) as f: pid = int(f.read().strip())
+        except (OSError, ValueError):
+            pid = None
+        alive = pid is not None and os.path.isdir(f"/proc/{pid}")
+        if want_on and not alive:
+            d = os.path.dirname(SOUL_PIDFILE); os.makedirs(d, exist_ok=True)
+            log = open(os.path.join(d, "soul.log"), "ab")
+            p = subprocess.Popen(["setsid", "/usr/bin/python3",
+                                  os.path.join(HERE, "shader_soul.py")],
+                                 stdout=log, stderr=log)
+            with open(SOUL_PIDFILE, "w") as f: f.write(str(p.pid))
+        elif not want_on and alive:
+            try: os.kill(pid, signal.SIGTERM)
+            except OSError: pass
+            if os.path.exists(SOUL_PIDFILE): os.remove(SOUL_PIDFILE)
     def _test_shake(self, _b):
         """Queue 0.5s of fast zigzag (at the 16ms tick cadence) through the real detector."""
         self.st.shake = [(40.0 if i % 2 else 220.0, 110.0 + 40.0 * math.sin(i * 2.1))

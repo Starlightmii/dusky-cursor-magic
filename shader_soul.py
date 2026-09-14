@@ -257,21 +257,23 @@ def main():
     except Exception:
         pass
 
+    # clicks: same proven evdev watcher the daemon uses (socket2 events
+    # proved unreliable — the .sock is a request socket, not an event bus).
+    from clicks import ClickWatcher
+
+    def on_click(ev):
+        if ev["kind"] == "press":
+            click_q.append(ev)
+
+    click_q = __import__("collections").deque()
+    watcher = ClickWatcher(); watcher.start(on_click)
+
     def poll_clicks(now):
-        try:
-            if evsock[0] is None:
-                evsock[0] = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
-                evsock[0].connect(ESOCK)
-                evsock[0].setblocking(False)
-            data = evsock[0].recv(8192).decode(errors="replace")
-            for line in data.splitlines():
-                if "mousebutton>>" in line:
-                    energy[0] = 1.0
-                    if line.rstrip().endswith(">>1"):
-                        ripples.append((0.0, 0.0, now, 1.0))
-                        del ripples[:-4]
-        except (BlockingIOError, OSError):
-            evsock[0] = None
+        while click_q:
+            ev = click_q.popleft()
+            energy[0] = 1.0
+            ripples.append((0.0, 0.0, now, 1.0))
+            del ripples[:-4]
 
     pos_file = os.environ.get("AURA_POS_FILE")   # test seam: file has 'x y'
 

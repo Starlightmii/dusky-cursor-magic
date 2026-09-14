@@ -30,7 +30,7 @@ CHECKS = (("sprite", "bob", "bob"), ("sprite", "spin", "spin"),
           ("aura", "trail", "trail"), ("stars", "enabled", "stars"),
           ("ambient", "on", "whisper"), ("ambient", "idle_shimmer", "shimmer"),
           ("playback", "on", "alive spin"),
-          ("soul", "on", "shader soul"))
+          ("soul", "on", "shader soul"), ("soul", "hide_arrow", "hide arrow"))
 KEY_DEFAULTS = {"size": 1.0, "bob": True, "spin": True, "trail": True,
                 "enabled": True, "on": True, "idle_shimmer": True,
                 "max_gain": 0.78}

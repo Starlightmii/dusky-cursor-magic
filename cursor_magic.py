@@ -228,6 +228,17 @@ class Daemon:
             self.aura = AuraMachine(peak_scale=mo["peak_scale"],
                                     start_scale=mo["start_scale"],
                                     profile=prof)
+        hs = self.cfg.get("soul", {})
+        hide = bool(hs.get("hide_arrow")) and bool(hs.get("on", True))
+        if hide != getattr(self, "_hide_arrow", None):
+            self._hide_arrow = hide
+            inv = os.path.expanduser("~/.local/share/icons/Invisible/cursors")
+            if hide and os.path.isdir(inv):
+                self.hypr("hyprctl dispatch setcursor Invisible 24")
+            elif not hide:
+                self.hypr("hyprctl dispatch setcursor %s %s" % (
+                    os.environ.get("XCURSOR_THEME", "Dusky"),
+                    os.environ.get("XCURSOR_SIZE", "18")))
         if self.disabled and self.win.get_visible():
             self.win.hide()
 

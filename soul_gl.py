@@ -61,8 +61,12 @@ void main(){
     if (u_rip[k].w > 0.0 && u_rip[k].z >= 0.0 && u_rip[k].z < LIFE) {
       float u = u_rip[k].z / LIFE;
       float rr = u_R0 * 4.2 * pow(u, u_ripE[k]);
+      // Sedov pressure decay t^-1.2 x life-fade, top-clamped 2.2 (see CPU)
+      float amp = (u_ripE[k] < 1.0)
+        ? min(pow(0.3 / max(u, 0.05), 1.2) * (1.0 - u), 2.2)
+        : (1.0 - u);
       glow += exp(-pow((length(q - u_rip[k].xy) - rr) / (u_R0 * 0.18), 2.0))
-            * (1.0 - u) * u_rip[k].w * 0.8;
+            * amp * u_rip[k].w * 0.8;
     }
   }
   float pulse = 0.9 + 0.10 * sin(u_t * 2.6) + 0.06 * sin(u_t * 5.1);

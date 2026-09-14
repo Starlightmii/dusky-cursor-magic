@@ -325,10 +325,16 @@ class Aura:
                 # on their own INSIDE the field — no edge pin, no hidden box.
                 # exp<1 = Sedov-Taylor blast, exp=1 = linear click ring
                 rr = self.R0 * 4.2 * (uu ** exp)
+                # Sedov pressure decay behind the front: amp ∝ t^-1.2 flash
+                # × (1-u) life-fade (omni cycle-7, unclamped — the [0,1]
+                # clamp flattens it back to linear). Breakout punches, the
+                # remnant evaporates; top-clamped at 2.2 = nova flash scale.
+                amp = min((0.3 / max(uu, 0.05)) ** 1.2 * (1.0 - uu), 2.2) \
+                    if exp < 1.0 else (1.0 - uu)
                 band = np.exp(-(((np.hypot(self.gx - x * self.SCALE,
                                            self.gy - y * self.SCALE) - rr)
                                  / (self.R0 * 0.18)) ** 2))
-                glow += band * (1.0 - uu) * s * 0.8
+                glow += band * amp * s * 0.8
         # alive ring hugging the pointer (breathes, tightens when moving)
         pulse = 0.9 + 0.10 * math.sin(t * 2.6) + 0.06 * math.sin(t * 5.1)
         ringR = self.R0 * 0.20 * (1.0 - 0.25 * speed) * pulse

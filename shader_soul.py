@@ -197,7 +197,10 @@ class Stars:
                 u = age / life
                 a = ((1.0 - u * u) * (0.45 + 0.25 * math.sin(age * tw * math.tau)
                      + 0.30 * math.sin(t * 2.6 + ang * 3.0)))
-                ang2 = ang + drift * age          # slow galaxy rotation
+                ang2 = ang + drift * age * (1.0 - 0.45 * min(r / 90.0, 1.0))
+                # differential omega (partner recipe: inner orbits faster,
+                # hive galaxy) — shears the burst into a spiral arm, ×0.02
+                # scaled for a cursor-sized field (raw rates = pinwheel)
                 out.append((r0[0] + r * math.cos(ang2) - ox,
                             r0[1] + r * math.sin(ang2) - oy,
                             size * (1.0 - 0.4 * u), spin * age, max(0.0, a)))

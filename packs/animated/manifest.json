@@ -1,0 +1,78 @@
+{
+ "name": "animated",
+ "attribution": "Microsoft fluentui-emoji-animated (MIT) - https://github.com/microsoft/fluentui-emoji-animated",
+ "emotions": {
+  "star": {
+   "type": "gif",
+   "path": "star.gif"
+  },
+  "shooting_star": {
+   "type": "gif",
+   "path": "shooting_star.gif"
+  },
+  "glowing_star": {
+   "type": "gif",
+   "path": "glowing_star.gif"
+  },
+  "comet": {
+   "type": "gif",
+   "path": "comet.gif"
+  },
+  "full_moon": {
+   "type": "gif",
+   "path": "full_moon.gif"
+  },
+  "new_moon": {
+   "type": "gif",
+   "path": "new_moon.gif"
+  },
+  "sun": {
+   "type": "gif",
+   "path": "sun.gif"
+  },
+  "ringed_planet": {
+   "type": "gif",
+   "path": "ringed_planet.gif"
+  },
+  "crystal_ball": {
+   "type": "gif",
+   "path": "crystal_ball.gif"
+  },
+  "crown": {
+   "type": "gif",
+   "path": "crown.gif"
+  },
+  "owl": {
+   "type": "gif",
+   "path": "owl.gif"
+  },
+  "cat_face": {
+   "type": "gif",
+   "path": "cat_face.gif"
+  },
+  "flame": {
+   "type": "gif",
+   "path": "flame.gif"
+  },
+  "heart_on_fire": {
+   "type": "gif",
+   "path": "heart_on_fire.gif"
+  },
+  "sparkling_heart": {
+   "type": "gif",
+   "path": "sparkling_heart.gif"
+  },
+  "snowflake": {
+   "type": "gif",
+   "path": "snowflake.gif"
+  },
+  "unicorn": {
+   "type": "gif",
+   "path": "unicorn.gif"
+  },
+  "butterfly": {
+   "type": "gif",
+   "path": "butterfly.gif"
+  }
+ }
+}

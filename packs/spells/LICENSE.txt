@@ -1,0 +1,5 @@
+spell_animations spritesheets
+Author: Viktor Hahn (Viktor.Hahn@web.de)
+License: CC BY 4.0
+Source: https://opengameart.org/content/spell-animation-spritesheets
+Used: sphere_blue.png -> orbsoul, cauterize.png -> firebrand (sliced frames, resized).

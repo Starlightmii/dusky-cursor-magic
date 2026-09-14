@@ -1,0 +1,18 @@
+{
+ "name": "spells",
+ "attribution": "spell_animations by Viktor Hahn (CC BY 4.0) - https://opengameart.org/content/spell-animation-spritesheets",
+ "emotions": {
+  "orbsoul": {
+   "type": "seq",
+   "path": "orbsoul/",
+   "frames": 27,
+   "fps": 15
+  },
+  "firebrand": {
+   "type": "seq",
+   "path": "firebrand/",
+   "frames": 35,
+   "fps": 15
+  }
+ }
+}

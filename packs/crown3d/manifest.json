@@ -1,0 +1,11 @@
+{
+  "name": "crown3d",
+  "emotions": {
+    "crown3d": {
+      "type": "seq",
+      "path": "frames/",
+      "frames": 24,
+      "fps": 24
+    }
+  }
+}

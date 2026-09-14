@@ -1,0 +1,31 @@
+# License: MIT (Microsoft Corporation)
+
+# Each asset is a multi-frame GIF converted from the animated Fluent emoji
+set (APNG) published at https://github.com/microsoft/fluentui-emoji-animated
+(MIT license, see https://github.com/microsoft/fluentui-emoji-animated/blob/main/LICENSE).
+Conversion: every 2nd frame kept, max side 256 (PIL LANCZOS), transparency
+preserved. Source APNGs are 256x256 already; no upscaling.
+
+# Per-asset source URLs:
+
+butterfly.gif  <-  https://media.githubusercontent.com/media/microsoft/fluentui-emoji-animated/main/assets/Butterfly/animated/butterfly_animated.png  (MIT)
+cat_face.gif  <-  https://media.githubusercontent.com/media/microsoft/fluentui-emoji-animated/main/assets/Cat%20face/animated/cat_face_animated.png  (MIT)
+comet.gif  <-  https://media.githubusercontent.com/media/microsoft/fluentui-emoji-animated/main/assets/Comet/animated/comet_animated.png  (MIT)
+crown.gif  <-  https://media.githubusercontent.com/media/microsoft/fluentui-emoji-animated/main/assets/Person%20with%20crown/Default/animated/person_with_crown_animated_default.png  (MIT)
+crystal_ball.gif  <-  https://media.githubusercontent.com/media/microsoft/fluentui-emoji-animated/main/assets/Crystal%20ball/animated/crystal_ball_animated.png  (MIT)
+flame.gif  <-  https://media.githubusercontent.com/media/microsoft/fluentui-emoji-animated/main/assets/Fire/animated/fire_animated.png  (MIT)
+full_moon.gif  <-  https://media.githubusercontent.com/media/microsoft/fluentui-emoji-animated/main/assets/Full%20moon%20face/animated/full_moon_face_animated.png  (MIT)
+glowing_star.gif  <-  https://media.githubusercontent.com/media/microsoft/fluentui-emoji-animated/main/assets/Glowing%20star/animated/glowing_star_animated.png  (MIT)
+heart_on_fire.gif  <-  https://media.githubusercontent.com/media/microsoft/fluentui-emoji-animated/main/assets/Heart%20on%20fire/animated/heart_on_fire_animated.png  (MIT)
+new_moon.gif  <-  https://media.githubusercontent.com/media/microsoft/fluentui-emoji-animated/main/assets/New%20moon%20face/animated/new_moon_face_animated.png  (MIT)
+owl.gif  <-  https://media.githubusercontent.com/media/microsoft/fluentui-emoji-animated/main/assets/Owl/animated/owl_animated.png  (MIT)
+ringed_planet.gif  <-  https://media.githubusercontent.com/media/microsoft/fluentui-emoji-animated/main/assets/Ringed%20planet/animated/ringed_planet_animated.png  (MIT)
+shooting_star.gif  <-  https://media.githubusercontent.com/media/microsoft/fluentui-emoji-animated/main/assets/Shooting%20star/animated/shooting_star_animated.png  (MIT)
+snowflake.gif  <-  https://media.githubusercontent.com/media/microsoft/fluentui-emoji-animated/main/assets/Snowflake/animated/snowflake_animated.png  (MIT)
+sparkling_heart.gif  <-  https://media.githubusercontent.com/media/microsoft/fluentui-emoji-animated/main/assets/Sparkling%20heart/animated/sparkling_heart_animated.png  (MIT)
+star.gif  <-  https://media.githubusercontent.com/media/microsoft/fluentui-emoji-animated/main/assets/Star/animated/star_animated.png  (MIT)
+sun.gif  <-  https://media.githubusercontent.com/media/microsoft/fluentui-emoji-animated/main/assets/Sun/animated/sun_animated.png  (MIT)
+unicorn.gif  <-  https://media.githubusercontent.com/media/microsoft/fluentui-emoji-animated/main/assets/Unicorn/animated/unicorn_animated.png  (MIT)
+
+Note: skipped assets with no good animated source in these repos: rune,
+crescent (only Full/New moon faces are animated upstream).

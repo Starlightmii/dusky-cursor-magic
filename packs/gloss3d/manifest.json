@@ -1,0 +1,34 @@
+{
+ "name": "gloss3d",
+ "attribution": "3dicons by realvjy (CC0) - https://github.com/realvjy/3dicons",
+ "emotions": {
+  "crown": {
+   "type": "png",
+   "path": "crown.png"
+  },
+  "flame": {
+   "type": "png",
+   "path": "flame.png"
+  },
+  "heart": {
+   "type": "png",
+   "path": "heart.png"
+  },
+  "wand": {
+   "type": "png",
+   "path": "wand.png"
+  },
+  "moon": {
+   "type": "png",
+   "path": "moon.png"
+  },
+  "rocket": {
+   "type": "png",
+   "path": "rocket.png"
+  },
+  "star": {
+   "type": "png",
+   "path": "star.png"
+  }
+ }
+}

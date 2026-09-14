@@ -1,0 +1,5 @@
+3dicons
+https://github.com/realvjy/3dicons (https://3dicons.co)
+License: CC0-1.0 (verified via GitHub API spdx_id)
+Author: realvjy
+7 of 100+ icons used, CDN 'color' variants.

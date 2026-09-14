@@ -1,0 +1,66 @@
+{
+ "name": "fluent3d",
+ "attribution": "Microsoft fluentui-emoji (MIT) - https://github.com/microsoft/fluentui-emoji",
+ "emotions": {
+  "crescent": {
+   "type": "png",
+   "path": "crescent.png"
+  },
+  "star": {
+   "type": "png",
+   "path": "star.png"
+  },
+  "shooting_star": {
+   "type": "png",
+   "path": "shooting_star.png"
+  },
+  "glowing_star": {
+   "type": "png",
+   "path": "glowing_star.png"
+  },
+  "sparkles": {
+   "type": "png",
+   "path": "sparkles.png"
+  },
+  "sparkler": {
+   "type": "png",
+   "path": "sparkler.png"
+  },
+  "comet": {
+   "type": "png",
+   "path": "comet.png"
+  },
+  "galaxy": {
+   "type": "png",
+   "path": "galaxy.png"
+  },
+  "planet": {
+   "type": "png",
+   "path": "planet.png"
+  },
+  "gem": {
+   "type": "png",
+   "path": "gem.png"
+  },
+  "crown": {
+   "type": "png",
+   "path": "crown.png"
+  },
+  "cat": {
+   "type": "png",
+   "path": "cat.png"
+  },
+  "butterfly": {
+   "type": "png",
+   "path": "butterfly.png"
+  },
+  "newmoon": {
+   "type": "png",
+   "path": "newmoon.png"
+  },
+  "halfmoon": {
+   "type": "png",
+   "path": "halfmoon.png"
+  }
+ }
+}

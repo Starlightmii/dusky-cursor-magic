@@ -151,6 +151,7 @@ Paths are relative to the pack directory. The Studio's pack chooser scans
 | `spells` | 5 seq (orbsoul/firebrand/fireball/voidorb/ghostsmoke) | spell_animations sheets, gutter-sliced (CC BY 4.0) |
 | `planet3d` / `rune3d` | 60f / 48f seq | procedural planet + rune turntables (`scripts/render3d_planet_rune.py`) |
 | `imported/*` | seq | your own GIFs / frame folders via the studio Import button |
+| `fox3d` | 60f seq | **real glTF model** (CC BY, Khronos samples) → turntable via `scripts/render3d_model.py` |
 
 ## How it works
 

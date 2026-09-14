@@ -1,0 +1,2 @@
+Fox model: CC BY 4.0, tomkranis (2014), @AsoboStudio and @scurest (2017), via KhronosGroup/glTF-Sample-Assets.
+Turntable frames rendered procedurally by scripts/render3d_model.py (MIT, project license).

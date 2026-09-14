@@ -200,6 +200,20 @@ class StarField:
         return len(self._stars)
 
 
+def ambient_gain(speed, min_speed=150.0, speed_range=3850.0, gamma=0.3,
+                 max_gain=0.78):
+    """Cycle-4: continuous speed -> ambient gain, Stevens-law curve.
+    ((speed-min)/range)^gamma * max_gain, clamped to [0, max_gain]. gamma<1
+    (perceptual power ~0.3) makes glide speeds feel perceptible early and
+    keeps headroom to flick speeds instead of a hard linear ceiling;
+    gamma=1 reproduces the old linear ramp for legacy configs."""
+    u = (speed - min_speed) / max(1.0, speed_range)
+    if u <= 0.0:
+        return 0.0
+    g = min(1.0, u) ** gamma
+    return min(max_gain, max_gain * g)
+
+
 def playback_boost(energy, speed, base=1.0, cap=2.5, k=0.3, v_max=4000.0):
     """Cycle-3: seq-pack playback rate multiplier from live motion state.
     energy: aura energy [0,1] (melt-tailed), speed: cursor px/s, base: the

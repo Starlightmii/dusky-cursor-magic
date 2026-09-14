@@ -34,8 +34,9 @@
  "ambient": {
   "on": true,
   "min_speed": 150.0,
-  "speed_range": 900.0,
-  "max_gain": 0.35,
+  "speed_range": 3850.0,
+  "gamma": 0.3,
+  "max_gain": 0.78,
   "idle_shimmer": true
  },
  "canvas_px": 512,

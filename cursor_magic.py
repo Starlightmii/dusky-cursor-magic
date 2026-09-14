@@ -12,7 +12,7 @@ from gi.repository import Gtk, Gdk, GdkPixbuf, GtkLayerShell, GLib
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from magic_core import (WiggleDetector, AuraMachine, StarField, SpeedEstimator,
                         frame_index, load_packs, decode_frames, load_config,
-                        playback_boost)
+                        playback_boost, ambient_gain)
 
 PACK_DIRS = [os.path.expanduser("~/.config/dusky/cursor-magic/packs"),
              os.path.join(os.path.dirname(os.path.abspath(__file__)), "packs")]
@@ -269,16 +269,18 @@ class Daemon:
                         self.cfg["emotion"], self.cfg.get("sprite_pack") or None)
                     if self.sprite_on:
                         self.aura._peak_heat = self.wig.heat
-            # U5: ambient whisper — feed the (until-now unused) SpeedEstimator;
-            # ordinary glide speed lifts the aura to a faint breath, never near
-            # arm_heat, so no sprite / false shake trigger
+            # U5/Cycle-4: continuous speed-driven scale — ambient_gain's
+            # Stevens curve maps glide speed to a perceptible butter ramp
+            # (the aura spring does the smoothing both directions)
             sp = self.speed_est.feed(now, pos[0], pos[1])
             am = self.cfg.get("ambient", {})
             amb = 0.0
             if am.get("on", True) and not self._reduced:
-                amb = max(0.0, min(1.0, (sp - am.get("min_speed", 150.0)) /
-                                   am.get("speed_range", 900.0))) \
-                      * am.get("max_gain", 0.35)
+                amb = ambient_gain(sp,
+                                   min_speed=am.get("min_speed", 150.0),
+                                   speed_range=am.get("speed_range", 3850.0),
+                                   gamma=am.get("gamma", 0.3),
+                                   max_gain=am.get("max_gain", 0.78))
             # U7 comet trail: 0.35s window; stop feeding when parked so the
             # tail dissolves on stop instead of freezing into a ribbon
             if self.aura.alpha > 0.02 and sp > 60.0:

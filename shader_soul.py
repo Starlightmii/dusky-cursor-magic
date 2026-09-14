@@ -20,6 +20,7 @@ Self-check:  --test  (prints PASS/FAIL on speed-grows-size + centre ink)
 import argparse
 import math
 import os
+import random
 import socket
 import subprocess
 import sys
@@ -131,6 +132,107 @@ def fbm(x, y, octaves=3):
     return v
 
 
+class Stars:
+    """Galaxy sparkle field: 4-point stars (Gaussian cross) with ease-out
+    radial launch, spin, twinkle; trail stars drift in slow orbit. All
+    additive into the same glow field, tinted by aura tints."""
+    TAU0 = 0.35
+
+    def __init__(self, cap=140):
+        self._s = []          # (t0, ang, spd, size, life, spin, tw, r0, drift)
+        self.cap = cap
+
+    def shed(self, t, x, y, size=1.0):
+        """One trail sparkle: slow lazy drift, golden-angle direction."""
+        self._s.append((t, t * 2.39996 % math.tau, random.uniform(30, 90),
+                        random.uniform(4, 9) * size, random.uniform(0.55, 0.95),
+                        random.uniform(-1.0, 1.0), random.uniform(1.5, 2.6),
+                        (x, y), random.uniform(0.5, 1.6)))
+        if len(self._s) > self.cap:
+            self._s = self._s[-self.cap:]
+
+    def burst(self, t, x, y, n_ring=14, n_hero=2, n_micro=5, size=1.0,
+              speed=1.0):
+        """Layered click-burst (recipe from research Cycle-6: Konixx/VFX
+        assets — ring is the read, micro the texture, hero the focal):
+        even ring +0.05rad jitter + alternating radius, golden-angle micro
+        at sub speeds, 2.2x slow hero. No gravity, no duplicates."""
+        rng = random.random
+        for i in range(n_ring):
+            ang = i * math.tau / n_ring + (rng() - 0.5) * 0.087
+            self._add(t, ang, random.uniform(300, 450) * size * speed,
+                      random.uniform(14, 26) * size * (1.0 if i % 2 else 0.72),
+                      random.uniform(0.55, 0.75), 0.75 * (rng() - 0.5) * 2,
+                      random.uniform(1.6, 2.4), x, y, rng() * 0.5)
+        for _ in range(n_hero):
+            ang = rng() * math.tau
+            self._add(t, ang, random.uniform(140, 250), random.uniform(14, 26) * 2.2,
+                      random.uniform(0.9, 1.2), random.uniform(6, 10) * (1 - 2 * rng()),
+                      random.uniform(3, 4), x, y, rng() * 0.4)
+        for i in range(n_micro):
+            ang = i * 2.39996 + rng() * 0.15           # golden angle, jittered
+            v = random.uniform(0.25, 0.6)
+            self._add(t, ang, random.uniform(300, 450) * v, random.uniform(6, 10),
+                      random.uniform(0.3, 0.45), random.uniform(1, 4) * (1 - 2 * rng()),
+                      random.uniform(2.2, 3.2), x, y, rng() * 0.3)
+        if len(self._s) > self.cap:
+            self._s = self._s[-self.cap:]
+
+    def _add(self, t, ang, spd, size, life, spin, tw, x, y, drift):
+        self._s.append((t, ang, spd, size, life, spin, tw, (x, y), drift))
+
+    def live(self, t, org=(0.0, 0.0), half=110.0):
+        """[(x, y, size, rot, alpha)] in field coords (canvas px, centre-
+        relative). Stars store SCREEN px — the galaxy stays put while the
+        overlay window chases the pointer. Twinkle = per-star rate + a
+        spiral wave shared across the burst (sin(t*ω + ang*3)) — the galaxy
+        pulses as one, then desyncs."""
+        ox, oy = org[0] + half, org[1] + half      # canvas centre on screen
+        out = []
+        keep = []
+        for (t0, ang, spd, size, life, spin, tw, r0, drift) in self._s:
+            age = t - t0
+            if 0 <= age <= life:
+                r = spd * self.TAU0 * (1.0 - math.exp(-age / self.TAU0))
+                u = age / life
+                a = ((1.0 - u * u) * (0.45 + 0.25 * math.sin(age * tw * math.tau)
+                     + 0.30 * math.sin(t * 2.6 + ang * 3.0)))
+                ang2 = ang + drift * age          # slow galaxy rotation
+                out.append((r0[0] + r * math.cos(ang2) - ox,
+                            r0[1] + r * math.sin(ang2) - oy,
+                            size * (1.0 - 0.4 * u), spin * age, max(0.0, a)))
+                keep.append((t0, ang, spd, size, life, spin, tw, r0, drift))
+        self._s = keep
+        return out
+
+def stamp(gx, gy, glow, stars, scale=2):
+    """Additive 4-point sparkles. Star coords are canvas px relative to the
+    field CENTER (same frame as gx/gy, which span -half..+half canvas px);
+    field index = coord/scale + half. Windowed to each star's bbox — a
+    30-star burst costs ~2ms, a full-grid stamp would cost 45ms."""
+    hy, hx = glow.shape[0] / 2.0, glow.shape[1] / 2.0
+    for (x, y, size, rot, a) in stars:
+        fx, fy = x / scale + hx, y / scale + hy     # field index space
+        if a <= 0.01 or not (-glow.shape[0] < fy < 2 * glow.shape[0]
+                             and -glow.shape[1] < fx < 2 * glow.shape[1]):
+            continue
+        hw = int(size * 1.35 / scale) + 2
+        x0, x1 = max(int(fx) - hw, 0), min(int(fx) + hw + 1, glow.shape[1])
+        y0, y1 = max(int(fy) - hw, 0), min(int(fy) + hw + 1, glow.shape[0])
+        if x0 >= x1 or y0 >= y1:
+            continue
+        dx = gx[y0:y1, x0:x1] - x
+        dy = gy[y0:y1, x0:x1] - y
+        c, s_ = math.cos(rot), math.sin(rot)
+        u = dx * c + dy * s_
+        v = -dx * s_ + dy * c
+        sig = size * 0.28
+        g = glow[y0:y1, x0:x1]
+        g += (np.exp(-(u * u) / (sig * sig) - (v * v) / (sig * sig * 9.0))
+              + np.exp(-(v * v) / (sig * sig) - (u * u) / (sig * sig * 9.0))) * a * 1.4
+        g += np.exp(-(dx * dx + dy * dy) / (sig * sig)) * a * 0.9
+
+
 class Aura:
     """Pixel field with speed-scaling, breathing, ripples, click energy.
     Renders at 1/2 canvas resolution; cairo upscales (the glow is low
@@ -154,7 +256,7 @@ class Aura:
         self.ny = self.gy * 0.028
 
     def render(self, t, speed, energy, ripples, out, core=False,
-               hot=(0.0, 0.0), vel=(0.0, 0.0), trail=(0.0, 0.0)):
+               hot=(0.0, 0.0), vel=(0.0, 0.0), trail=(0.0, 0.0), stars=()):
         """Fill ARGB32 numpy `out` (F x F view) with the current aura frame.
         hot = pointer offset from canvas centre in canvas px (non-zero at
         screen edges where the layer window clamps). Ripples carry
@@ -215,6 +317,10 @@ class Aura:
                 rt = np.hypot(rx - tx, ry - ty)
                 glow += np.exp(-((rt / (cr_ * 0.8)) ** 2)) * 0.8 * min(
                     math.hypot(tx, ty) / 40.0, 1.0)
+        # galaxy star field: click-bursts + shed trail stars, same tints,
+        # one clock (passed t) — everything twinkles in synced phase waves
+        if stars:
+            stamp(self.gx, self.gy, glow, stars, self.SCALE)
         a = np.clip(glow * self.ascale, 0.0, 1.0)
         tint = np.clip(wob * 0.6 + speed * 0.55 + energy * 0.35, 0.0, 1.0)[..., None]
         cool_, warm_ = self.tints or ((0.42, 0.62, 1.00), (1.00, 0.72, 0.38))
@@ -372,6 +478,8 @@ def main():
     energy = [0.0]
     vel = [(0.0, 0.0)]                # smoothed per-frame pointer delta
     ripples = []                     # canvas-local (x-off, y-off, t0, s)
+    stars = Stars()                  # galaxy sparkles (canvas px coords)
+    shed_pt = [None]                 # last trail-star spawn point (screen px)
     last = [None, None, None, 0.0]   # [pos, idle-pos, idle-hot, last-render]
     trail = [None]                   # slow EMA of screen pointer pos
     evsock = [None]
@@ -398,6 +506,7 @@ def main():
     click_q = __import__("collections").deque()
     watcher = ClickWatcher(); watcher.start(on_click)
     hot_st = [0.0, 0.0]              # live pointer offset from canvas centre
+    ptr = [0, 0]                     # live pointer screen px
 
     def poll_clicks(now):
         while click_q:
@@ -406,6 +515,8 @@ def main():
             ripples.append((hot_st[0] / Aura.SCALE, hot_st[1] / Aura.SCALE,
                             now, 1.0))
             del ripples[:-4]
+            stars.burst(now - start, float(ptr[0]), float(ptr[1]),
+                        speed=1.0 + min(speed[0], 0.6))
 
     pos_file = os.environ.get("AURA_POS_FILE")   # test seam: file has 'x y'
 
@@ -444,16 +555,26 @@ def main():
         hot = (float(x - ml - C // 2), float(y - mt - C // 2))
         trail_hot = (trail[0][0] - ml - C / 2.0, trail[0][1] - mt - C / 2.0)
         hot_st[0], hot_st[1] = hot
+        ptr[0], ptr[1] = x, y
         GtkLayerShell.set_margin(win, GtkLayerShell.Edge.LEFT, ml)
         GtkLayerShell.set_margin(win, GtkLayerShell.Edge.TOP, mt)
         poll_clicks(now)
         energy[0] *= 0.90
+        # tail stars: shed a sparkle whenever the trail orb has drifted >=26px
+        # from the last spawn — sparkles mark the path, spaced, synced twinkle
+        tp = trail[0]
+        if speed[0] > 0.12 and (shed_pt[0] is None
+                                or math.hypot(tp[0] - shed_pt[0][0],
+                                              tp[1] - shed_pt[0][1]) > 26.0):
+            shed_pt[0] = tp
+            stars.shed(now - start, tp[0], tp[1], size=0.7 + speed[0])
         live = [(rx, ry, now - t0, s) for (rx, ry, t0, s) in ripples
                 if now - t0 < RIPPLE_LIFE]
+        slive = stars.live(now - start, (ml, mt), C / 2.0)
         # idle budget: pointer still + nothing decaying -> 30fps is plenty
         # (the 2.6rad/s breath samples fine at half rate; 2x less CPU)
         moved = last[1] != (x, y) or hot != last[2]
-        active = moved or speed[0] > 0.01 or energy[0] > 0.02 or live
+        active = moved or speed[0] > 0.01 or energy[0] > 0.02 or live or slive
         if not active and now - last[3] < 1.0 / 30.0:
             return True
         last[3] = now
@@ -465,7 +586,7 @@ def main():
         aura.strength = float(ac.get("strength", args.strength))
         aura.render(now - start, speed[0], energy[0], live, buf,
                     core=bool(ac.get("hide_arrow")), hot=hot, vel=vel[0],
-                    trail=trail_hot)
+                    trail=trail_hot, stars=slive)
         surf_box[0] = cairo.ImageSurface.create_for_data(
             buf.view(np.uint8), cairo.FORMAT_ARGB32, F, F)
         area.queue_draw()

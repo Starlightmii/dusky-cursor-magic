@@ -10,7 +10,7 @@ st.burst(0.0, 110, 110)                                  # click burst at orb
 for i in range(6):                                       # trail behind
     st.shed(-0.05 * i - 0.02, 110 + 30 + i * 22, 110 + i * 9)
 buf = np.zeros((a.F, a.F), np.uint32)
-a.render(0.4, 0.5, 0.6, [(0, 0, 0.1, 1.0)], buf, core=True,
+a.render(0.4, 0.5, 0.6, [(0, 0, 0.1, 1.0, 1.0)], buf, core=True,
          stars=st.live(0.4, (0.0, 0.0), C / 2.0))
 surf = cairo.ImageSurface.create_for_data(buf.view(np.uint8), cairo.FORMAT_ARGB32, a.F, a.F)
 big = cairo.ImageSurface(cairo.FORMAT_ARGB32, C, C)

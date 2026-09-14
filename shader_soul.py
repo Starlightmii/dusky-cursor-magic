@@ -285,14 +285,19 @@ class Aura:
         glow += ring
         glow *= 1.0 + (wob - 0.5) * (0.55 + 0.35 * speed)
         glow += energy * np.exp(-((r / R) ** 2)) * 0.6
-        # click ripples: expanding rings that fade
-        for (x, y, age, s) in ripples:
+        # click ripples: expanding rings that fade. exp=1.0 linear (click);
+        # exp=0.4 Sedov-Taylor blast wave (supernova): violent breakout that
+        # decelerates — R ∝ t^0.4 is how real supernova remnants expand.
+        for (x, y, age, s, exp) in ripples:
             if 0.0 <= age < RIPPLE_LIFE:
-                rr = age * self.R0 * 6.0
+                uu = age / RIPPLE_LIFE
+                # shared endpoint R0*6 at u=1; exp<1 = violent breakout that
+                # decelerates (u^0.4 leads linear by 1.44x at half-life)
+                rr = self.R0 * 6.0 * (uu ** exp)
                 band = np.exp(-(((np.hypot(self.gx - x * self.SCALE,
                                            self.gy - y * self.SCALE) - rr)
                                  / (self.R0 * 0.18)) ** 2))
-                glow += band * (1.0 - age / RIPPLE_LIFE) * s * 0.8
+                glow += band * (1.0 - uu) * s * 0.8
         # alive ring hugging the pointer (breathes, tightens when moving)
         pulse = 0.9 + 0.10 * math.sin(t * 2.6) + 0.06 * math.sin(t * 5.1)
         ringR = self.R0 * 0.20 * (1.0 - 0.25 * speed) * pulse
@@ -526,7 +531,7 @@ def main():
             ev = click_q.popleft()
             energy[0] = 1.0
             ripples.append((hot_st[0] / Aura.SCALE, hot_st[1] / Aura.SCALE,
-                            now, 1.0))
+                            now, 1.0, 1.0))
             del ripples[:-4]
             stars.burst(now - start, float(ptr[0]), float(ptr[1]),
                         speed=1.0 + min(speed[0], 0.6))
@@ -583,7 +588,7 @@ def main():
             (nnow, nx_, ny_) = nova_pt[0]
             nova_pt[0] = None
             ripples.append(((nx_ - ml - C / 2.0) / Aura.SCALE,
-                            (ny_ - mt - C / 2.0) / Aura.SCALE, nnow, 2.4))
+                            (ny_ - mt - C / 2.0) / Aura.SCALE, nnow, 2.4, 0.4))
         GtkLayerShell.set_margin(win, GtkLayerShell.Edge.LEFT, ml)
         GtkLayerShell.set_margin(win, GtkLayerShell.Edge.TOP, mt)
         poll_clicks(now)
@@ -596,7 +601,7 @@ def main():
                                               tp[1] - shed_pt[0][1]) > 26.0):
             shed_pt[0] = tp
             stars.shed(now - start, tp[0], tp[1], size=0.7 + speed[0])
-        live = [(rx, ry, now - t0, s) for (rx, ry, t0, s) in ripples
+        live = [(rx, ry, now - t0, s, e) for (rx, ry, t0, s, e) in ripples
                 if now - t0 < RIPPLE_LIFE]
         slive = stars.live(now - start, (ml, mt), C / 2.0)
         # idle budget: pointer still + nothing decaying -> 30fps is plenty

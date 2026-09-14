@@ -213,10 +213,11 @@ class Stars:
                 # Steinrücken twinkle: SIZE pulses with brightness (never
                 # vanishes flat) — same phase, 50-150%
                 size_k = size * (1.0 + 0.5 * tw_k) * (1.0 - 0.4 * u)
-                ang2 = ang + drift * age * (1.0 - 0.45 * min(r / 90.0, 1.0))
-                # differential omega (partner recipe: inner orbits faster,
-                # hive galaxy) — shears the burst into a spiral arm, ×0.02
-                # scaled for a cursor-sized field (raw rates = pinwheel)
+                # Köppen log-spiral arms (b≈1.2, Milky-Way model): outer
+                # stars lag by b*ln(1+r/40) so ANY burst shears into galaxy
+                # arms; differential-omega term keeps inner orbit faster
+                ang2 = (ang + drift * age * (1.0 - 0.45 * min(r / 90.0, 1.0))
+                        + 1.2 * math.log1p(r / 40.0))
                 out.append((r0[0] + r * math.cos(ang2) - ox,
                             r0[1] + r * math.sin(ang2) - oy,
                             size_k, spin * age, max(0.0, a)))

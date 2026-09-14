@@ -1,0 +1,52 @@
+CYCLE-6 RECIPE — galaxy sparkles for shader_soul.py (numeric constants, paste-ready)
+All formulas from verified published sources (Godot Shaders / Art-of-Code Steinrucken starfield, saltmire-spark MIT tuned presets, lexrus water_ripple, Hyprland wiki). Local files with full code: /tmp/water_ripple.glsl, /tmp/gpu_proof5.py, /tmp/egl_wayland_probe.py.
+
+══ 1. 4-POINT SPARKLE SPRITE (the ✦ star) — canonical formula (Steinrucken "Star(uv, flare)", verified godotshaders.com/shader/starfield-parallax-shader + /starfield-angled):
+  d = length(uv)                    # uv centered on star, in star-radius units
+  m  = 0.02 / d                     # gaussian-ish core falloff
+  # 4-point cross: rays along axes
+  rays  = max(0.0, 1.0 - abs(uv.x * uv.y * 10000.0))
+  m   += rays * flare               # flare ~ 0.5..1.0
+  # diagonal pair: rotate 45 deg, SAME formula, 0.3 weight
+  uv  = rot(uv, PI/4)
+  rays = max(0.0, 1.0 - abs(uv.x * uv.y * 10000.0))
+  m   += rays * 0.3 * flare
+  m   *= smoothstep(1.0, 0.2, d)    # window 1.0 -> 0.2 radius cutoff
+NUMPY PORT for stamp(): the ray term = max(0, 1 - K*|x*y|) is separable — evaluate on the star's bbox grid (already windowed); K=10000 in uv-units ≈ K*8e-4 per canvas px² at size≈1. Tune: rays axis K_x=10000, diag K=10000*0.3. Diagonal length ratio 0.3-0.4 of main spikes. Add spin: rotate bbox by star.rot before evaluating (you already have spin*age).
+
+══ 2. CLICK BURST GEOMETRY (layered; your n_ring/n_hero/n_micro structure is right — these are the tuned numbers):
+  LAYER A — ring (the "read"): n=14 (already), angles EVEN + jitter ±0.05rad (12..16 fine), radius alternation 1.0/0.72, speed 300-450 px/s, life 0.55-0.75s, size 14-26px, twinkle 1.6-2.4.
+  LAYER B — micro (texture): n=5-8, golden-angle spiral ang = i*2.39996 rad (137.5°) — sunflower fill, zero clump spots — speed 60-150 px/s (sub-speeds, saltmire pickup uses 150), life 0.3-0.5s, size 4-9px, spin fast ±6-10 rad/s.
+  LAYER C — hero (focal): n=2-3, speed 140-250 px/s, life 0.9-1.2s, size 2.2× ring, spin slow 6-10 rad/s * (1-2*rand).
+  Decay: no gravity (space theme); speed decays via your exp ease-out TAU0=0.35 (verified good — matches saltmire damping 2.6 ≈ τ 0.38). Alpha curve (1-u²) is right; add color2 fade-to-transparent like saltmire (start gold-white -> end theme-tint).
+  vs golden-angle-only burst: layered wins — golden angle alone reads as a spiral galaxy (use that for SHED, below).
+  Reference tuned presets (saltmire-spark spark.gd, MIT, verified today): hit: n=12, speed 300, life 0.28, size 3, gravity 200, spread PI*0.7 | explode: n=34, speed 380, life 0.6, size 5, spread TAU, damping 2.6 | pickup: n=12, speed 150, life 0.5, gravity -120 (rises!) | confetti: n=28, speed 300, life 0.9, gravity 520.
+
+══ 3. TWINKLE SYNC (phase-lock then desync — you already have sin(t*2.6+ang*3); refine):
+  Per-star: sin(age * tw * TAU) with tw ∈ 1.5-2.6 (you have it) — per-star frequencies UNIFORM in [1.5, 2.6] not gauss — uniform reads as sparkle noise, gauss as breathing.
+  GLOBAL sync wave: 0.30 * sin(t * 2.6 + ang * 3.0) — that's the "pulse as one" (all burst stars launched same t0 share the wave). Desync comes naturally: life 0.55-0.75 vs shed stars life 0.55-0.95 + freq spread.
+  Freq range sanity: 2.6 rad/s = 0.41 Hz global pulse; per-star 1.5-2.6 Hz (tw*TAU ~ 9.4-16.3 rad/s is too fast — actual: tw is cycles/sec after TAU mult, so 1.5-2.6 Hz flicker ≈ film sparkle rate; Godot starfield uses twinkle 1.0 with sin(iTime*0.3*twinkle + n*48.123) — 0.3 rad/s base * random phase 48.123*hash).
+  Steinrucken's exact twinkle: size_t = size * (sin(iTime*0.3*twinkle + n*48.123)*0.5+1.0) — the *0.5+1 remaps sin to [0.5,1.5] so stars PULSE SIZE 50-150%, never vanish. Use for size modulation: size * (1 + 0.5*sin(age*tw*TAU)) — brighter AND bigger together (additive alpha alone looks dim-only).
+  SHED stars (trail): golden-angle direction t*2.39996 % TAU (you have — correct phyllotaxis), speed 30-90 px/s, life 0.55-0.95, drift 0.5-1.6 rad/s orbit (your ang2 = ang + drift*age is the "galaxy rotation").
+
+══ 4. GALAXY FEEL (orbital drift):
+  Spiral-arm shear (Köppen Milky-Way model, verified): arms = logarithmic spirals, angular offset per radius: θ(r) = θ0 + b*ln(r); differential rotation Ω ~ 1/r (inner faster). For a 300px aura: arm_phase = 1.2*ln(1 + r/40px) — stars at 2× radius lag ~0.8 rad in angle — that shear IS the galaxy look.
+  Advection rate: drift ∈ [0.5, 1.6] rad/s (yours) ≈ 8-26°/s — reads as majestic, not spin. Add shear: ang2 = ang + drift*age + 1.2*ln(1+r_px/40) so outer stars trail behind = spiral arms form from any burst.
+  Curl for trail wiggle: add sin(age*3 + ang*2)*0.15 to ang2 — cheap fake curl.
+
+══ 5. CC0 STAR-BURST SHAPES:
+  - procedural only, per Steinrucken formula above (free, no license issue, matches your numpy stack);
+  - opengameart.org/content/animated-blue-ring-explosion (CC0) ring PNG seq if you want a prerendered click ring;
+  - Kenney particle-pack (CC0, kenney.nl) — has sparkle/circle shapes as fallback sprites.
+  I verified the Steinrucken Godot port renders identical math to shadertoy original (godotshaders.com credits Martijn Steinrucken / The Art of Code; the godotshaders.com/shader/starfield-angled variant adds ray_p1.8-pow cross with 30000 constant: rays = max(0., 1.-abs(pow(abs(uv.x),1.8)*uv.y*30000.)) — sharper spikes; pick one).
+
+══ CYCLE-5 ANSWERS (from my earlier probes, now with DEFINITIVE GPU result):
+1. GPU PATH EXISTS — I proved it end-to-end on this box today (Intel UHD iGPU via Mesa, ZERO contention with the 3050's ASR/TTS):
+   - eglGetPlatformDisplay(EGL_PLATFORM_WAYLAND, wl_display_connect(...)) + GLES3 context + KHR_surfaceless_context (MakeCurrent with no surface) = WORKS. Renderer: "Mesa Intel(R) UHD Graphics (ADL-S GT0.5)".
+   - THE BUG in "no configs": attribute combo. GLES2+PBUFFER+alpha8+D24 → 0 configs (looks dead). GLES3+WINDOW+8/8/8/8 → 120 configs; desktop GL → 150. On the WAYLAND platform display — the one your layer-shell window actually uses.
+   - Full proof: domain-warped fbm aura shader (your cycle-1 recipe) rendered 200 frames at 256px in 0.32ms/frame, FBO readback verified (core lum 184, ring 213, corner 2), PNG saved. Script: /tmp/gpu_proof5.py (ctypes-only, no pyopengl needed). Probes: /tmp/egl_wayland_probe.py (per-combo config counts), /tmp/egl_probe.py (per-display extensions).
+   - Compositing path: render aura on GPU → glReadPixels/EGL_MESA_image_dma_buf_export into a dmabuf → your existing cairo layer-shell window just samples it (or keep shared-memory wl_shm, copy the numpy array from GPU once per frame — 256px copy is trivial, ~0.1ms).
+   - NVIDIA surfaceless (renderD128) also yields 40 WINDOW configs but NO alpha pbuffer; Intel iGPU is the better target anyway (NVIDIA on Wayland = EGL_WL_wayland_eglstream quirks).
+2. Cursor capture: grim on this box HAS -c ("Include cursors in the screenshot", man verified). Lowercase -c, not -C/-p. So: `grim -c out.png` → check if arrow pixels present near last cursorpos → auto-verify invisible-theme. Fallback: ext_image_copy_capture_cursor_session_v1 exists in Hyprland's protocol set (verified locally in /usr/share/wayland-protocols + hyprland-protocols) — a client can get the cursor PLANE as its own buffer.
+3. Ripple math (numpy-portable, constants from lexrus water_ripple.glsl — verified constants, not vibes): single ring: sin(k*r - ω*age) * 1/(1+FALLOFF*r) * exp(-DECAY*age) * lifeFade * causal, k=33 UV⁻¹, ω=22 s⁻¹, DECAY_RATE=0.5 s⁻¹, FALLOFF_SCALE=1.6, FRONT_SPEED=0.67 UV/s, FRONT_WIDTH=0.09, RIPPLE_LIFE=1.8s, lifeFade=(1-age/LIFE)^0.8, causal=1-smoothstep(front±FRONT_WIDTH, r). DOUBLE-CLICK: two emitters age-offset by inter-click delay (~0.25s), same constants — interference superposes naturally (height fields SUM, per the shader). HOLD-CHARGE: gate amplitude by stepGain from hold duration (exp ramp τ≈0.4s, release fires burst with strength ∝ charge).
+4. Transparent cursor theme: Hyprland uses hyprcursor; a fully-empty theme has precedent issues: #7625 "cursor invisible all of the time" (closed not_planned — user-triggered via rose-pine-hyprcursor env misconfig), #5654 "no fallback found for a cursor in setCursorFromName" — Hyprland falls back to default when a shape is missing, so a THEME WITH SOME EMPTY shapes risks default-arrow popping through on shapes you didn't blank. Safer: blank ALL shapes incl. every resize/corner variant, or rely on your overlay + normal theme with no_hardware_cursors and plane behavior; `hyprctl setcursor` exists (sets theme live, wiki verified). Also cursor:hide_on_key_press exists in newer Hyprland (verified in the local option dump: bool). No Hyprland issue found documenting an empty plane/flicker when theme is transparent — the plane composites with alpha, so a transparent sprite = nothing visible; the risk is only missing-shape fallback, not flicker.

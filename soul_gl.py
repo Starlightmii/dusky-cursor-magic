@@ -53,10 +53,12 @@ void main(){
                         q.y * 0.028 + u_t * 0.18)
                    + vec2(0.0, fbm2(vec2(q.x * 0.014 - u_t * 0.06,
                                          q.y * 0.014)) * 0.9));
+  // EVENT-ONLY: no ambient at rest/moving — light only inside nova/click
+  float ambient = u_energy > 0.0 ? 1.0 : 0.0;
   float glow = exp(-pow(r / u_R, 2.0))
              + exp(-pow((r - u_R * 0.82) / (u_R * 0.35), 2.0)) * (0.30 + 0.25 * u_speed);
   glow *= 1.0 + (wob - 0.5) * (0.55 + 0.35 * u_speed);
-  glow += u_energy * exp(-pow(r / u_R, 2.0)) * 0.6;
+  glow = glow * ambient + u_energy * exp(-pow(r / u_R, 2.0)) * 0.6;
   for (int k = 0; k < NR; k++) {
     if (u_rip[k].w > 0.0 && u_rip[k].z >= 0.0 && u_rip[k].z < LIFE) {
       float u = u_rip[k].z / LIFE;
@@ -279,7 +281,8 @@ class SoulGL(S.Aura):
         GL.glUniform1f(u["u_speed"], speed)
         GL.glUniform1f(u["u_energy"], energy)
         GL.glUniform1f(u["u_R"],
-                       self.R0 * (1.0 + self.grow * speed) * self.strength)
+                       self.R0 * (1.0 + self.grow * speed) * self.strength
+                       * (1.0 + 1.5 * min(energy, 1.5)))
         GL.glUniform1f(u["u_R0"], self.R0)
         GL.glUniform1f(u["u_ascale"], self.ascale)
         GL.glUniform1f(u["u_coreOn"], 1.0 if core else 0.0)

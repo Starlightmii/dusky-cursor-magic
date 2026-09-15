@@ -1,27 +1,27 @@
-# Cursor Soul — an alive cursor aura for Hyprland (Dusky)
+# Cursor Soul — an event-only light for Hyprland (Dusky)
 
-One tiny daemon (`shader_soul.py`): a GPU-rendered living aura with galaxy
-stars and supernovae that follow your pointer — and never hide what's under it.
+One tiny daemon (`shader_soul.py`): a cursor companion that lives in the
+dark and speaks in starlight — one only. The soul emits **no ambient glow
+at all**: at rest, while moving, clicking, with music playing — black. The
+one and only light is the **long-stay supernova**: park your pointer for
+9–15 s and it detonates.
 
 ## What it does
-- **see-through aura**: a clear hole under the whole arrow glyph + a 0.72
-  alpha cap on the veil — text and icons under the cursor stay readable
-- **alive**: breathes, twitches when alone, leans toward the pointer like a pet
-- **surface aware** (`--surface`): 2 Hz grim sample under the pointer — shines
-  harder over dark UI, dims over bright paper (firefly instinct)
-- **music synced** (`--music`): PipeWire monitor tap → bass swells the radius,
-  treble brightens the glow, beats flare the energy and sprinkle stars
-- **galaxy tail**: star sparkles shed along the path — spacing tightens with
-  speed (30px → 12px), so a fast sweep paints a dense comet
-- **speed galaxy**: hard sustained sweeps drag 6-star mini-bursts along the path
-- **SUPERNOVA**, two ways:
-  - slam on the brakes after a fast sweep → white-hot detonation
-  - just park the mouse 9–15 s → a BIG detonation (24-ring blast) with an echo
-    shockwave 0.25 s later
-  - Sedov–Taylor blast physics: `R ∝ t^0.4` front, `t^-1.2` pressure decay
-- **click burst**: layered ring + hero + golden micro-stars, log-spiral arms
-- **GPU**: GLES3 surfaceless render of the aura field on the iGPU
-  (`--renderer gpu`, auto CPU fallback), ~2× faster than numpy
+- **event-only light**: zero ambient glow (rest & transit are pitch black) —
+  nothing ever hides under the cursor; the field's only light is the nova
+- **SUPERNOVA**: park the mouse 9–15 s → BIG detonation (24-ring blast,
+  4 hero stars, radius swells ~2.4x, white-hot flash blooms ~1.5 s) plus a
+  Sedov–Taylor shockwave and an echo ring at +0.25 s; moving re-arms the
+  window, so the next stay fires fresh
+- **alive in the dark**: the soul still leans toward the pointer like a pet
+  and tracks the layer window with 2-frame latency compensation (motion,
+  not light)
+- **surface aware** (`--surface`): grim samples what's under the pointer —
+  the nova's brightness adapts (shines over dark UI, dims over paper)
+- **music aware** (`--music`): PipeWire tap modulates the nova's radius
+  and tint — heard only during the detonation, never as idle glow
+- **GPU**: GLES3 surfaceless render on the iGPU (`--renderer gpu`, auto
+  CPU fallback); 5% steady CPU while dark
 
 ## Install / run
 ```sh
@@ -37,15 +37,22 @@ stars and supernovae that follow your pointer — and never hide what's under it
 "radius": 34, ...}}`, polled at 1 Hz; theme auto-follows
 `~/.cache/wal/colors.json`)
 
-## Tuning constants (`shader_soul.py` top)
-`RIPPLE_LIFE 0.85` · `MAX_ALPHA 0.72` (veil cap) · idle-nova window
-`random.uniform(9, 15)` · shed spacing `max(12, 30-18*speed)` px
+## Tuning constants (`shader_soul.py`)
+`RIPPLE_LIFE 0.85` · `MAX_ALPHA 0.72` (veil cap) · nova window
+`random.uniform(9, 15)` · energy decay `0.955/tick` (~1.5 s bloom) ·
+nova radius swell `1.0 + 1.5·min(E, 1.5)`
+
+## The dark design (gates keep it dark)
+`shader_soul.py --test` enforces: alpha ≤ 6/255 everywhere at rest AND
+moving (event-only black) + the nova flash must light >2 % of the field.
+`test_aura_screen.py` measures real screen pixels: rest-glow <5 %,
+fast-glow <5 %, and a parked pointer must bloom >20 % within 22 s.
 
 ## Gates
 ```sh
 python3 shader_soul.py --test && for t in test_*.py; do python3 $t; done
 ```
-`--test` (see-through hole + speed-grows physics) · `test_idle_nova.py` ·
-`test_stars.py` · `test_shockwave.py` · `test_sedov_decay.py` ·
-`test_gl_parity.py` (GPU↔CPU lockstep) · `test_aura_screen.py` (real screen) ·
-`test_music.py` · `test_orb_squash.py` · `test_click_parse.py`
+`--test` · `test_idle_nova.py` · `test_stars.py` · `test_shockwave.py` ·
+`test_sedov_decay.py` · `test_gl_parity.py` (GPU↔CPU lockstep) ·
+`test_aura_screen.py` (real screen) · `test_music.py` ·
+`test_orb_squash.py` · `test_click_parse.py`

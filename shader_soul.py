@@ -321,7 +321,15 @@ class Aura:
         (gx,gy,age,strength); core=True paints the orb AT the pointer.
         vel = smoothed pointer velocity (canvas px/frame): the orb squashes
         along its motion like hypr-dynamic-cursors tilts the sprite."""
-        R = self.R0 * (1.0 + self.grow * speed) * self.strength
+        # radius swells with the event energy — the long-stay nova is the
+        # soul's ONLY light, so it blooms BIG (2.4 energy -> ~2.4x radius)
+        R = self.R0 * (1.0 + self.grow * speed) * self.strength \
+            * (1.0 + 1.5 * min(energy, 1.5))
+        # EVENT-ONLY aura: no ambient glow at rest or while moving — the
+        # light exists ONLY inside nova/click events (energy flash + ripples
+        # + stars). Caller holds energy=0 unless an event just fired, so
+        # gate ambient on it and keep the event channels untouched.
+        ambient = 1.0 if energy > 0.0 else 0.0
         rx = self.gx - hot[0]
         ry = self.gy - hot[1]
         r = (self.r if hot == (0.0, 0.0) else np.hypot(rx, ry))
@@ -332,7 +340,7 @@ class Aura:
         ring = np.exp(-(((r - R * 0.82) / (R * 0.35)) ** 2)) * (0.30 + 0.25 * speed)
         glow += ring
         glow *= 1.0 + (wob - 0.5) * (0.55 + 0.35 * speed)
-        glow += energy * np.exp(-((r / R) ** 2)) * 0.6
+        glow = glow * ambient + energy * np.exp(-((r / R) ** 2)) * 0.6
         # click ripples: expanding rings that fade. exp=1.0 linear (click);
         # exp=0.4 Sedov-Taylor blast wave (supernova): violent breakout that
         # decelerates — R ∝ t^0.4 is how real supernova remnants expand.
@@ -444,24 +452,22 @@ def main():
     if args.test:                                   # headless self-check
         rest = field_only(C, args.radius, 0.5, 0.0, 0.0, grow=args.grow)
         fast = field_only(C, args.radius, 0.5, 1.0, 0.0, grow=args.grow)
+        nova = field_only(C, args.radius, 0.5, 1.0, 2.2, grow=args.grow)
         F = C // Aura.SCALE
         n_rest = int((rest >> 24 > 12).sum())
         n_fast = int((fast >> 24 > 12).sum())
+        n_nova = int((nova >> 24 > 12).sum())
         hole = int((rest[F // 2, F // 2] >> 24))
-        # see-through rule: the whole arrow footprint stays clear (r<=14px
-        # alpha==0) and the veil is capped so content always ghosts through
-        yy, xx = np.mgrid[0:rest.shape[0], 0:rest.shape[1]]
-        rr_px = np.hypot(xx - F / 2, yy - F / 2) * Aura.SCALE
-        disk_max = int((rest[rr_px <= 14.0] >> 24).max())
-        cap_max = int((rest >> 24).max())
-        see = disk_max == 0 and cap_max <= int(0.75 * 255) + 8
-        # the physics the user demanded: fast grows smooth, never floods
-        ok = (n_fast > 1.8 * n_rest > 0 and n_fast < F * F * 0.8
-              and hole == 0 and see)
+        # EVENT-ONLY contract: black at rest AND moving (no ambient glow),
+        # nova flash big. The light lives only inside nova/click events.
+        n_dark_rest = int((rest >> 24 > 6).sum())
+        n_dark_fast = int((fast >> 24 > 6).sum())
+        dark = n_dark_rest == 0 and n_dark_fast == 0
+        ok = (dark and n_nova > F * F * 0.02 and hole == 0)
         print(f"TEST: rest={n_rest}px fast={n_fast}px growth={n_fast / max(n_rest,1):.2f}x "
               f"centre-hole-a={hole}", flush=True)
-        print(f"TEST: see-through disk-max={disk_max} cap-max={cap_max} "
-              f"(<= {int(0.75 * 255) + 8})", flush=True)
+        print(f"TEST: event-only dark rest={n_dark_rest}px fast={n_dark_fast}px "
+              f"nova={n_nova}px", flush=True)
         print("TEST:", "PASS" if ok else "FAIL", flush=True)
         sys.exit(0 if ok else 1)
 
@@ -577,7 +583,6 @@ def main():
     buf = np.zeros((F, F), np.uint32)
     speed = [0.0]
     energy = [0.0]
-    peak = [0.0]                   # max speed since last blast (supernova arm)
     nova_at = [-9.0]               # monotonic time of last supernova
     still_since = [0.0]            # when the pointer went still
     fire_at = [random.uniform(9.0, 15.0)]   # idle detonation window
@@ -586,8 +591,6 @@ def main():
     vel = [(0.0, 0.0)]                # smoothed per-frame pointer delta
     ripples = []                     # canvas-local (x-off, y-off, t0, s)
     stars = Stars()                  # galaxy sparkles (canvas px coords)
-    shed_pt = [None]                 # last trail-star spawn point (screen px)
-    burst_at = [0.0]                 # next sustained-sweep mini-burst time
     mus = None
     if args.music == "on":
         try:
@@ -597,7 +600,6 @@ def main():
         except Exception:
             mus = None               # no audio tap -> soul behaves normally
     bob = [0.0, 0.0, 0.0, 0.0]       # homing spring x,y,vx,vy (the pet leans)
-    twitch_at = [0.0]                # next idle micro-sparkle time
     surf = [0.5, 0.0]                # surface lum EMA + last sample time
     if args.surface == "on":
         import threading
@@ -644,12 +646,9 @@ def main():
     def poll_clicks(now):
         while click_q:
             ev = click_q.popleft()
-            energy[0] = 1.0
-            ripples.append((hot_st[0] / Aura.SCALE, hot_st[1] / Aura.SCALE,
-                            now, 1.0, 1.0))
-            del ripples[:-4]
-            stars.burst(now - start, float(ptr[0]), float(ptr[1]),
-                        speed=1.0 + min(speed[0], 0.6))
+            # EVENT-ONLY: clicks do NOT light the soul — the long-stay
+            # supernova is the only light this cursor ever makes.
+            del ev
 
     pos_file = os.environ.get("AURA_POS_FILE")   # test seam: file has 'x y'
 
@@ -678,19 +677,9 @@ def main():
             va = 0.35 if math.hypot(*vel[0]) > math.hypot(dx, dy) else 0.18
             vel[0] = (vel[0][0] + (dx - vel[0][0]) * va,
                       vel[0][1] + (dy - vel[0][1]) * va)
-            # SUPERNOVA: a fast sweep that slams on the brakes detonates.
-            # arm on peak>0.85, fire when speed collapses <0.35, 1.2s cooldown
-            peak[0] = max(peak[0], speed[0])
-            if (peak[0] > 0.85 and speed[0] < 0.35
-                    and now - nova_at[0] > 1.2):
-                nova_at[0] = now
-                peak[0] = 0.0
-                energy[0] = 2.2                  # white-hot flash (clip handles it)
-                stars.supernova(now - start, float(x), float(y))
-                nova_pt[0] = (now, x, y)         # shockwave ring once hot is known
         # IDLE SUPERNOVA: parked long enough, the soul detonates on its own —
-        # one BIG blast + an echo shockwave 0.25s later. Fast-sweep nova above
-        # shares the nova_at cooldown via idle_nova_due's last_nova check.
+        # one BIG blast + an echo shockwave 0.25s later. This is now the
+        # ONLY supernova: light exists only inside this long-stay event.
         if speed[0] > 0.02:
             still_since[0] = now
         hit, fire_at[0] = idle_nova_due(now, still_since[0], nova_at[0],
@@ -744,40 +733,19 @@ def main():
             echo[0] = (0.0, 0.0, 0.0)
             ripples.append(((ex_ - ml - C / 2.0) / Aura.SCALE,
                             (ey_ - mt - C / 2.0) / Aura.SCALE, enow, 1.7, 0.4))
+        del ripples[:-8]
         GtkLayerShell.set_margin(win, GtkLayerShell.Edge.LEFT, ml)
         GtkLayerShell.set_margin(win, GtkLayerShell.Edge.TOP, mt)
         poll_clicks(now)
-        energy[0] *= 0.90
+        # event energy decay ~1.5s (0.955^~90 ticks): the lone nova blooms
+        # long enough to read as an explosion, then the field goes black
+        energy[0] *= 0.955
         bass = mid = treb = beat = 0.0
         if mus:
             bass, mid, treb, beat = mus.poll(now)
-            if bass > 0.5 and beat > 0.25 and speed[0] < 0.3:
-                # a kick lands while you're parked: the soul flares a touch
-                energy[0] = max(energy[0], min(0.55, beat * 0.35))
-            if beat > 0.6 and speed[0] > 0.05:
-                # riding a fast sweep across the downbeat: sprinkle stars
-                stars.shed(now - start, x, y, size=0.5 + beat * 0.6)
-        # idle twitch: alone and still, the soul breathes a tiny sparkle
-        if (not mus or bass < 0.05) and speed[0] < 0.02 and now > twitch_at[0]:
-            twitch_at[0] = now + random.uniform(2.5, 5.0)
-            stars.shed(now - start, x + random.uniform(-8, 8),
-                       y + random.uniform(-8, 8), size=0.35)
-        # tail stars: shed a sparkle along the path — spacing tightens with
-        # speed (30px rest -> 12px flat-out): the faster you fly, the denser
-        # the comet. Sparkles mark the path, spaced, synced twinkle.
-        tp = trail[0]
-        if speed[0] > 0.12 and (shed_pt[0] is None
-                                or math.hypot(tp[0] - shed_pt[0][0],
-                                              tp[1] - shed_pt[0][1])
-                                > max(12.0, 30.0 - 18.0 * speed[0])):
-            shed_pt[0] = tp
-            stars.shed(now - start, tp[0], tp[1], size=0.7 + speed[0])
-        if speed[0] > 0.65 and now > burst_at[0]:
-            # hard sustained sweep: the soul drags a galaxy — mini-bursts
-            # sprinkle along the path, bigger the faster you fly
-            burst_at[0] = now + 0.18
-            stars.burst(now - start, x, y, n_ring=6, n_hero=1, n_micro=3,
-                        size=0.45 + 0.4 * speed[0], speed=0.9)
+        # EVENT-ONLY: no star spray, no tail comet, no twitch, no click
+        # flash — the long-stay supernova is the soul's only light. Music
+        # still modulates radius/brightness, heard only DURING the nova.
         live = [(rx, ry, now - t0, s, e) for (rx, ry, t0, s, e) in ripples
                 if now - t0 < RIPPLE_LIFE]
         slive = stars.live(now - start, (ml, mt), C / 2.0)

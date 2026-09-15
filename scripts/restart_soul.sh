@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 # restart soul: systemd owns it when the unit is active; else exact-pid kill+spawn
-if systemctl --user is-active --quiet cursor-soul; then
+if systemctl --user is-active --quiet cursor-soul ||
+   systemctl --user is-enabling --quiet cursor-soul; then
   systemctl --user restart cursor-soul
 else
   for p in $(pgrep -f 'python3? -u [^ ]*shader_soul[.]py'); do kill -TERM "$p" 2>/dev/null; done

@@ -581,6 +581,7 @@ def main():
         threading.Thread(target=_sense, daemon=True).start()
     last = [None, None, None, 0.0]   # [pos, idle-pos, idle-hot, last-render]
     trail = [None]                   # slow EMA of screen pointer pos
+    lead = [0.0, 0.0]                # raw per-tick dx/dy EMA (latency comp)
     evsock = [None]
     start = time.monotonic()
     screen = [1920, 1080]
@@ -629,6 +630,7 @@ def main():
             return True
         if not win.get_visible():
             win.show()
+        dx = dy = 0                       # first-tick safety (lead comp below)
         out = open(pos_file).read() if pos_file else hypr("cursorpos")
         try:
             x, y = map(int, out.replace(",", " ").split()[:2])
@@ -661,13 +663,23 @@ def main():
                         trail[0][1] + (y - trail[0][1]) * 0.18)
         ml = min(max(x - C // 2, 0), screen[0] - C)
         mt = min(max(y - C // 2, 0), screen[1] - C)
-        hot = (float(x - ml - C // 2), float(y - mt - C // 2))
+        # latency comp: arrow moves NOW, aura composites ~2 frames later
+        # (render ~5ms + queue). Extrapolate the pointer along its own raw
+        # tick velocity to cancel that — flight-display prediction. EMA'd
+        # so it vanishes instantly at rest; clamp 24px so reversals can't
+        # fling the aura ahead of where the arrow actually is.
+        lead[0] += (dx - lead[0]) * 0.35
+        lead[1] += (dy - lead[1]) * 0.35
+        px = max(-24.0, min(24.0, lead[0] * 1.7))
+        py = max(-24.0, min(24.0, lead[1] * 1.7))
+        hot = (float(x - ml - C // 2) + px, float(y - mt - C // 2) + py)
         trail_hot = (trail[0][0] - ml - C / 2.0, trail[0][1] - mt - C / 2.0)
         if args.homing == "on":
             # the pet leans: a damped spring drags the aura centre toward the
-            # pointer's motion, so fast flicks make it swing after you
-            tx = max(-14.0, min(14.0, vel[0][0] * 0.30))
-            ty = max(-14.0, min(14.0, vel[0][1] * 0.30))
+            # pointer's motion, so fast flicks make it swing after you.
+            # 10px clamp — enough to read alive, small next to the lead comp.
+            tx = max(-10.0, min(10.0, vel[0][0] * 0.30))
+            ty = max(-10.0, min(10.0, vel[0][1] * 0.30))
             bob[2] += (tx - bob[0]) * 0.10 - bob[2] * 0.22
             bob[3] += (ty - bob[1]) * 0.10 - bob[3] * 0.22
             bob[0] += bob[2]

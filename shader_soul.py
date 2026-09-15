@@ -34,6 +34,7 @@ import cairo  # noqa: E402
 import numpy as np  # noqa: E402
 
 RIPPLE_LIFE = 0.85
+MAX_ALPHA = 0.72   # veil never fully hides the surface under it (non-core)
 
 
 def set_cursor_theme(theme, size):
@@ -358,8 +359,9 @@ class Aura:
                 core_w = np.exp(-((r / cr_) ** 2))
             glow += core_w * 2.2
         else:
-            # soft hole so the real cursor sprite stays crisp at the centre
-            glow *= np.clip((r - 10.0) / 24.0, 0.0, 1.0)
+            # see-through: clear disk under the whole arrow glyph + capped
+            # veil, so what's under the cursor stays readable (ramp ~R0)
+            glow *= np.clip((r - self.R0 * 0.42) / (self.R0 * 0.55), 0.0, 1.0)
             core_w = None
         # comet tail: a fainter orb lagging behind the pointer (EMA fed by
         # caller at ~1/3 the rate -> it trails and catches up, moonlight feel)
@@ -373,7 +375,7 @@ class Aura:
         # one clock (passed t) — everything twinkles in synced phase waves
         if stars:
             stamp(self.gx, self.gy, glow, stars, self.SCALE)
-        a = np.clip(glow * self.ascale, 0.0, 1.0)
+        a = np.clip(glow * self.ascale, 0.0, 1.0 if core else MAX_ALPHA)
         tint = np.clip(wob * 0.6 + speed * 0.55 + energy * 0.35, 0.0, 1.0)[..., None]
         cool_, warm_ = self.tints or ((0.42, 0.62, 1.00), (1.00, 0.72, 0.38))
         cool = np.array(cool_, np.float32)
@@ -429,10 +431,20 @@ def main():
         n_rest = int((rest >> 24 > 12).sum())
         n_fast = int((fast >> 24 > 12).sum())
         hole = int((rest[F // 2, F // 2] >> 24))
+        # see-through rule: the whole arrow footprint stays clear (r<=14px
+        # alpha==0) and the veil is capped so content always ghosts through
+        yy, xx = np.mgrid[0:rest.shape[0], 0:rest.shape[1]]
+        rr_px = np.hypot(xx - F / 2, yy - F / 2) * Aura.SCALE
+        disk_max = int((rest[rr_px <= 14.0] >> 24).max())
+        cap_max = int((rest >> 24).max())
+        see = disk_max == 0 and cap_max <= int(0.75 * 255) + 8
         # the physics the user demanded: fast grows smooth, never floods
-        ok = n_fast > 1.8 * n_rest > 0 and n_fast < F * F * 0.8 and hole == 0
+        ok = (n_fast > 1.8 * n_rest > 0 and n_fast < F * F * 0.8
+              and hole == 0 and see)
         print(f"TEST: rest={n_rest}px fast={n_fast}px growth={n_fast / max(n_rest,1):.2f}x "
               f"centre-hole-a={hole}", flush=True)
+        print(f"TEST: see-through disk-max={disk_max} cap-max={cap_max} "
+              f"(<= {int(0.75 * 255) + 8})", flush=True)
         print("TEST:", "PASS" if ok else "FAIL", flush=True)
         sys.exit(0 if ok else 1)
 

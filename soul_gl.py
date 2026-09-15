@@ -88,7 +88,7 @@ void main(){
       glow += exp(-pow(length(pp - u_trail) / (cr_ * 0.8), 2.0)) * 0.8
             * min(length(u_trail) / 40.0, 1.0);
   } else {
-    glow *= clamp((r - 10.0) / 24.0, 0.0, 1.0);
+    glow *= clamp((r - u_R0 * 0.42) / (u_R0 * 0.55), 0.0, 1.0);
   }
   for (int k = 0; k < NS; k++) {
     float a = u_starA[k];
@@ -102,7 +102,7 @@ void main(){
       glow += exp(-dot(d, d) / (sig * sig)) * a * 0.9;
     }
   }
-  float al = clamp(glow * u_ascale, 0.0, 1.0);
+  float al = clamp(glow * u_ascale, 0.0, u_coreOn > 0.5 ? 1.0 : 0.72);
   float tint = clamp(wob * 0.6 + u_speed * 0.55 + u_energy * 0.35, 0.0, 1.0);
   vec3 rgb = mix(u_cool, u_warm, tint);
   if (coreW > 0.0) rgb += (1.0 - rgb) * clamp(coreW * 3.0, 0.0, 1.0);

@@ -1,43 +1,51 @@
-# Cursor Soul
+# Cursor Soul — an alive cursor aura for Hyprland (Dusky)
 
-One file. One window. The cursor **is** the soul: a living shader aura that
-follows your pointer on Hyprland — no system arrow, no sprites, no GIFs, no
-control panel.
+One tiny daemon (`shader_soul.py`): a GPU-rendered living aura with galaxy
+stars and supernovae that follow your pointer — and never hide what's under it.
 
-- Glowing orb that **squashes along your motion** and round-rests at idle
-- **Comet trail** lagging softly behind while you sweep
-- Aura **swells with speed**, breathes at rest, settles slow (macOS easing)
-- Every click fires a **ripple ring + energy flash** from the pointer
-- **Auto Dusky theme colours** — reads `~/.cache/wal/colors.json` at 1 Hz,
-  so the soul re-tints itself the moment you change your Dusky theme
-  (answers dusklinux/dusky#343 for the cursor: themeable, zero config)
-- Fully **click-through** (input-shape recipe), single-instance flock,
-  restores the system arrow on exit
-- **Music-synced** — taps the PipeWire speakers monitor, reads bass/mid/treble
-  + beat: the aura swells on the bass, brightens on hats, flares on kicks
-  while you're parked, and sprinkles stars on the downbeat mid-sweep
-- **Alive** — damped-spring homing lean (it swings after fast flicks like a
-  pet), idle twitch sparkles every few seconds so it never looks dead
-- GPU field on the Intel iGPU (`soul_gl.py`, GLES3 surfaceless): stars,
-  shockwaves, orb, aura in one fragment pass — ~3% CPU, auto CPU fallback
-- ~3% CPU idle / 60fps active
+## What it does
+- **see-through aura**: a clear hole under the whole arrow glyph + a 0.72
+  alpha cap on the veil — text and icons under the cursor stay readable
+- **alive**: breathes, twitches when alone, leans toward the pointer like a pet
+- **surface aware** (`--surface`): 2 Hz grim sample under the pointer — shines
+  harder over dark UI, dims over bright paper (firefly instinct)
+- **music synced** (`--music`): PipeWire monitor tap → bass swells the radius,
+  treble brightens the glow, beats flare the energy and sprinkle stars
+- **galaxy tail**: star sparkles shed along the path — spacing tightens with
+  speed (30px → 12px), so a fast sweep paints a dense comet
+- **speed galaxy**: hard sustained sweeps drag 6-star mini-bursts along the path
+- **SUPERNOVA**, two ways:
+  - slam on the brakes after a fast sweep → white-hot detonation
+  - just park the mouse 9–15 s → a BIG detonation (24-ring blast) with an echo
+    shockwave 0.25 s later
+  - Sedov–Taylor blast physics: `R ∝ t^0.4` front, `t^-1.2` pressure decay
+- **click burst**: layered ring + hero + golden micro-stars, log-spiral arms
+- **GPU**: GLES3 surfaceless render of the aura field on the iGPU
+  (`--renderer gpu`, auto CPU fallback), ~2× faster than numpy
 
-## Install
+## Install / run
+```sh
+./scripts/install_services.sh      # systemd user unit + enable
+./scripts/restart_soul.sh          # restart (systemd owns the flock)
+./scripts/selfcheck.sh             # gates + live health
+```
 
-    ./install.sh          # copies config + systemd --user unit, starts it
+## Flags
+`--radius 34 --glow 0.50 --fps 60 --renderer gpu|cpu --music on|off
+--homing on|off --surface on|off` (live config:
+`~/.config/dusky/cursor-magic/config.json` → `{"soul": {"hide_arrow": true,
+"radius": 34, ...}}`, polled at 1 Hz; theme auto-follows
+`~/.cache/wal/colors.json`)
 
-Survives reboot / relogin via `cursor-soul.service` (graphical-session).
-Tune in `~/.config/dusky/cursor-magic/config.json` → `soul` (`on`,
-`hide_arrow`, `radius`, `strength`, `grow`, `glow`).
+## Tuning constants (`shader_soul.py` top)
+`RIPPLE_LIFE 0.85` · `MAX_ALPHA 0.72` (veil cap) · idle-nova window
+`random.uniform(9, 15)` · shed spacing `max(12, 30-18*speed)` px
 
 ## Gates
-
-    /usr/bin/python3 shader_soul.py --test   # physics self-check
-    /usr/bin/python3 test_orb_squash.py      # squash-along-motion
-    /usr/bin/python3 test_click_parse.py     # evdev click parsing
-    /usr/bin/python3 test_aura_screen.py     # real screen pixels: speed grows aura
-    /usr/bin/python3 test_stars.py           # galaxy burst/nova gates
-    /usr/bin/python3 test_shockwave.py       # Sedov vs linear ring
-    /usr/bin/python3 test_gl_parity.py       # GPU field == CPU field
-    /usr/bin/python3 test_music.py           # beat grid + bands, synthetic track
-    bash scripts/selfcheck.sh                # layer alive + click-through
+```sh
+python3 shader_soul.py --test && for t in test_*.py; do python3 $t; done
+```
+`--test` (see-through hole + speed-grows physics) · `test_idle_nova.py` ·
+`test_stars.py` · `test_shockwave.py` · `test_sedov_decay.py` ·
+`test_gl_parity.py` (GPU↔CPU lockstep) · `test_aura_screen.py` (real screen) ·
+`test_music.py` · `test_orb_squash.py` · `test_click_parse.py`

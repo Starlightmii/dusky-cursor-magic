@@ -587,6 +587,7 @@ def main():
     ripples = []                     # canvas-local (x-off, y-off, t0, s)
     stars = Stars()                  # galaxy sparkles (canvas px coords)
     shed_pt = [None]                 # last trail-star spawn point (screen px)
+    burst_at = [0.0]                 # next sustained-sweep mini-burst time
     mus = None
     if args.music == "on":
         try:
@@ -761,14 +762,22 @@ def main():
             twitch_at[0] = now + random.uniform(2.5, 5.0)
             stars.shed(now - start, x + random.uniform(-8, 8),
                        y + random.uniform(-8, 8), size=0.35)
-        # tail stars: shed a sparkle whenever the trail orb has drifted >=26px
-        # from the last spawn — sparkles mark the path, spaced, synced twinkle
+        # tail stars: shed a sparkle along the path — spacing tightens with
+        # speed (30px rest -> 12px flat-out): the faster you fly, the denser
+        # the comet. Sparkles mark the path, spaced, synced twinkle.
         tp = trail[0]
         if speed[0] > 0.12 and (shed_pt[0] is None
                                 or math.hypot(tp[0] - shed_pt[0][0],
-                                              tp[1] - shed_pt[0][1]) > 26.0):
+                                              tp[1] - shed_pt[0][1])
+                                > max(12.0, 30.0 - 18.0 * speed[0])):
             shed_pt[0] = tp
             stars.shed(now - start, tp[0], tp[1], size=0.7 + speed[0])
+        if speed[0] > 0.65 and now > burst_at[0]:
+            # hard sustained sweep: the soul drags a galaxy — mini-bursts
+            # sprinkle along the path, bigger the faster you fly
+            burst_at[0] = now + 0.18
+            stars.burst(now - start, x, y, n_ring=6, n_hero=1, n_micro=3,
+                        size=0.45 + 0.4 * speed[0], speed=0.9)
         live = [(rx, ry, now - t0, s, e) for (rx, ry, t0, s, e) in ripples
                 if now - t0 < RIPPLE_LIFE]
         slive = stars.live(now - start, (ml, mt), C / 2.0)

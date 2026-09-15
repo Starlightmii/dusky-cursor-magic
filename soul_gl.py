@@ -32,6 +32,7 @@ precision highp float;
 #define NR %NR%
 #define LIFE %LIFE%
 uniform float u_t, u_speed, u_energy, u_R, u_R0, u_ascale, u_coreOn, u_seed;
+uniform float u_big, u_voidK;
 uniform vec2 u_hot, u_vel, u_trail;
 uniform vec3 u_cool, u_warm;
 uniform vec4 u_starP[NS];   // x,y,size,rot (canvas px, centre-relative)
@@ -53,7 +54,7 @@ void main(){
                         q.y * 0.028 + u_t * 0.18)
                    + vec2(0.0, fbm2(vec2(q.x * 0.014 - u_t * 0.06,
                                          q.y * 0.014)) * 0.9));
-  // EVENT-ONLY: no ambient at rest/moving — light only inside nova/click
+  // EVENT-ONLY: no ambient at rest/moving — light only inside nova (energy>0)
   float ambient = u_energy > 0.0 ? 1.0 : 0.0;
   float glow = exp(-pow(r / u_R, 2.0))
              + exp(-pow((r - u_R * 0.82) / (u_R * 0.35), 2.0)) * (0.30 + 0.25 * u_speed);
@@ -62,13 +63,16 @@ void main(){
   for (int k = 0; k < NR; k++) {
     if (u_rip[k].w > 0.0 && u_rip[k].z >= 0.0 && u_rip[k].z < LIFE) {
       float u = u_rip[k].z / LIFE;
-      float rr = u_R0 * 4.2 * pow(u, u_ripE[k]);
+      // BIG_K=3.0 in shader_soul.py: the galaxy blast outruns the window
+      float rr = u_R0 * 4.2 * mix(1.0, 3.0, u_big) * pow(u, u_ripE[k]);
       // Sedov pressure decay t^-1.2 x life-fade, top-clamped 2.2 (see CPU)
       float amp = (u_ripE[k] < 1.0)
         ? min(pow(0.3 / max(u, 0.05), 1.2) * (1.0 - u), 2.2)
         : (1.0 - u);
       glow += exp(-pow((length(q - u_rip[k].xy) - rr) / (u_R0 * 0.18), 2.0))
             * amp * u_rip[k].w * 0.8;
+      if (u_big > 0.5)
+        glow += float(length(q - u_rip[k].xy) < rr) * amp * u_rip[k].w * 0.8;
     }
   }
   float pulse = 0.9 + 0.10 * sin(u_t * 2.6) + 0.06 * sin(u_t * 5.1);
@@ -105,10 +109,18 @@ void main(){
     }
   }
   float al = clamp(glow * u_ascale, 0.0, u_coreOn > 0.5 ? 1.0 : 0.72);
+  float surv = al;                                  // glow alpha surviving
+  if (u_voidK > 0.0) {
+    // black hole: opaque event-horizon disk at the pointer EATS everything,
+    // stars included (premultiplied over-composite against black)
+    float vd = u_voidK * clamp((u_R0 * 1.35 - r) / (u_R0 * 0.54), 0.0, 1.0);
+    al = vd + surv * (1.0 - vd);
+    surv *= (1.0 - vd);
+  }
   float tint = clamp(wob * 0.6 + u_speed * 0.55 + u_energy * 0.35, 0.0, 1.0);
   vec3 rgb = mix(u_cool, u_warm, tint);
   if (coreW > 0.0) rgb += (1.0 - rgb) * clamp(coreW * 3.0, 0.0, 1.0);
-  o = vec4(rgb * al, al);                          // premultiplied, like cairo
+  o = vec4(rgb * surv, al);                         // premultiplied, like cairo
 }"""
 
 
@@ -263,7 +275,8 @@ class SoulGL(S.Aura):
         self._u = {n: U(n) for n in (
             "u_t", "u_speed", "u_energy", "u_R", "u_R0", "u_ascale",
             "u_coreOn", "u_seed", "u_hot", "u_vel", "u_trail", "u_cool",
-            "u_warm", "u_starP[0]", "u_starA[0]", "u_rip[0]", "u_ripE[0]")}
+            "u_warm", "u_starP[0]", "u_starA[0]", "u_rip[0]", "u_ripE[0]",
+            "u_big", "u_voidK")}
         self._px = np.empty((self.F, self.F, 4), np.uint8)
         self._starP = (ctypes.c_float * (MAX_STARS * 4))()
         self._starA = (ctypes.c_float * MAX_STARS)()
@@ -271,7 +284,8 @@ class SoulGL(S.Aura):
         self._ripE = (ctypes.c_float * MAX_RIPPLES)()
 
     def render(self, t, speed, energy, ripples, out, core=False,
-               hot=(0.0, 0.0), vel=(0.0, 0.0), trail=(0.0, 0.0), stars=()):
+               hot=(0.0, 0.0), vel=(0.0, 0.0), trail=(0.0, 0.0), stars=(),
+               void=0.0, big=False):
         GL = self._GL
         u = self._u
         GL.glUseProgram(self._prog)
@@ -287,6 +301,8 @@ class SoulGL(S.Aura):
         GL.glUniform1f(u["u_ascale"], self.ascale)
         GL.glUniform1f(u["u_coreOn"], 1.0 if core else 0.0)
         GL.glUniform1f(u["u_seed"], self.seed)
+        GL.glUniform1f(u["u_big"], 1.0 if big else 0.0)
+        GL.glUniform1f(u["u_voidK"], float(void))
         GL.glUniform2f(u["u_hot"], hot[0], hot[1])
         GL.glUniform2f(u["u_vel"], vel[0], vel[1])
         GL.glUniform2f(u["u_trail"], trail[0] - hot[0], trail[1] - hot[1])

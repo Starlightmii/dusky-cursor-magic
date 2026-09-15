@@ -46,13 +46,32 @@ def main():
     try:
         put(CXX, CY); time.sleep(2.5)          # settle, pointer still
         rest = snap()
-        end = time.monotonic() + 1.2
-        while time.monotonic() < end:           # fast sweep, pointer moving
+        # slow drift: tail must be SOFT (small capped stars, no blast).
+        # Gentle ±15px oscillation = 30px steps (speed EMA ~0.47), well
+        # under the 0.85 blast threshold, so this samples the tail only.
+        t_end = time.monotonic() + 1.0
+        tail_best = 0.0
+        while time.monotonic() < t_end:
+            put(CXX - 15, CY); time.sleep(1 / 60)
+            tail_best = max(tail_best, lit_pct(np.abs(snap() - base),
+                                               CXX, CY, 0, 160))
+            put(CXX + 15, CY); time.sleep(1 / 60)
+            tail_best = max(tail_best, lit_pct(np.abs(snap() - base),
+                                               CXX, CY, 0, 160))
+        # hard sustained sweep: speed EMA saturates -> galaxy blast fires,
+        # the fullscreen layer throws the shockwave across the whole desk.
+        # Sample MAX through the sweep so a 0.85s blast can't slip the net.
+        end = time.monotonic() + 1.6
+        fast_best = 0.0
+        while time.monotonic() < end:            # fast sweep, pointer moving
             put(CXX - 350, CY); time.sleep(1 / 60)
+            fast_best = max(fast_best, lit_pct(np.abs(snap() - base),
+                                               CXX, CY, 0, 160))
             put(CXX + 350, CY); time.sleep(1 / 60)
-        fast = snap()
+            fast_best = max(fast_best, lit_pct(np.abs(snap() - base),
+                                               CXX, CY, 0, 160))
         # park out the full re-armed 9-15s window (motion re-arms it); the
-        # nova flash (life < 1s) is sampled at 0.4s cadence so it can't hide
+        # nova flash (life < 1s) is sampled at 0.15s cadence so it can't hide
         put(CXX, CY)
         best = 0.0
         t_end = time.monotonic() + 22.0
@@ -60,13 +79,18 @@ def main():
             time.sleep(0.15)
             a = np.abs(snap() - base)
             best = max(best, lit_pct(a, CXX, CY, 0, 220))
-        rd = np.abs(rest - base); fd = np.abs(fast - base)
+        rd = np.abs(rest - base)
         rest_lit = lit_pct(rd, CXX, CY, 0, 160)
-        fast_lit = lit_pct(fd, CXX, CY, 0, 160)
-        print(f"rest-glow={rest_lit:.1f}% fast-glow={fast_lit:.1f}% "
-              f"nova-glow={best:.1f}%")
-        ok = rest_lit < 5 and fast_lit < 5 and best > 20
-        print("EVENT-ONLY SOUL ->", "PASS" if ok else "FAIL")
+        print(f"rest-glow={rest_lit:.1f}% tail-glow={tail_best:.1f}% "
+              f"fast-glow={fast_best:.1f}% nova-glow={best:.1f}%")
+        # CONTRACT (cycle-9 lifecycle):
+        #  - rest is BLACK (default Dusky arrow, no ambient)
+        #  - a slow move leaves a SOFT tail (present but far below a blast)
+        #  - a hard sustained sweep detonates a BIG blast (>= nova scale)
+        #  - a long park detonates the idle nova (the guaranteed big light)
+        ok = (rest_lit < 5 and tail_best < fast_best and fast_best > 12
+              and best > 20)
+        print("LIFECYCLE SOUL ->", "PASS" if ok else "FAIL")
         return 0 if ok else 1
     finally:
         os.kill(p.pid, signal.SIGTERM)

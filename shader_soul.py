@@ -34,7 +34,41 @@ import cairo  # noqa: E402
 import numpy as np  # noqa: E402
 
 RIPPLE_LIFE = 0.85
+BIG_K = 3.0         # galaxy-blast ripple reach multiplier: the shockwave
+                    # outruns the window (cairo arc paints the rest — no
+                    # hidden box, the wave crosses the WHOLE screen)
 MAX_ALPHA = 0.72   # veil never fully hides the surface under it (non-core)
+
+
+def soul_phase(now, still, last_nova, fire_at, collapse_at, moving,
+               fast=False, blast_at=0.0):
+    """Pure choreographer of the life cycle (still = when the pointer went
+    still, absolute):
+      rest    -> default Dusky arrow: field pitch black
+      gather  -> 5s of parked: black-hole void forms, particles fall IN
+      nova    -> the implosion collapses into the blast (fires once)
+      blast   -> sustained fast flight: the biggest galaxy blast
+    Any movement re-arms the long-stay window from the move instant.
+    Returns (phase, fire_at, collapse_at, blast_at) — caller stores 1..3."""
+    if moving:
+        # parked window restarts from the move instant — no implosion while
+        # the pointer flies — and a sustained fast sweep detonates instead
+        fire_at = now + random.uniform(9.0, 15.0)
+        collapse_at = fire_at - 5.0
+        if fast and now >= blast_at:
+            return "blast", fire_at, collapse_at, \
+                now + random.uniform(5.0, 8.0)
+        return "rest", fire_at, collapse_at, blast_at
+    if now >= fire_at and now - last_nova >= 2.0 and still <= collapse_at:
+        # detonate: the gathered void collapses into the blast, then the
+        # next long-stay cycle re-arms with its OWN 5s gather window —
+        # every park repeats black-hole -> implosion -> blast.
+        fire_at = now + random.uniform(9.0, 15.0)
+        collapse_at = fire_at - 5.0
+        return "nova", fire_at, collapse_at, blast_at
+    if still <= collapse_at <= now < fire_at:
+        return "gather", fire_at, collapse_at, blast_at
+    return "rest", fire_at, collapse_at, blast_at
 
 
 def idle_nova_due(now, still_since, last_nova, fire_at, moving):
@@ -223,13 +257,27 @@ class Stars:
             self.burst(t, x, y, n_ring=18, n_hero=3, n_micro=8, size=1.5,
                        speed=1.6)
 
-    def _add(self, t, ang, spd, size, life, spin, tw, x, y, drift):
+    def implode(self, t, x, y, n=3):
+        """Black-hole gathering: particles are born on a far ring
+        (start_r~140) and a NEGATIVE speed walks them inward along the
+        log-spiral arms until the event-horizon void swallows them."""
+        for _ in range(n):
+            ang = random.uniform(0.0, math.tau)
+            self._add(t, ang, -random.uniform(150.0, 240.0),
+                      random.uniform(3.0, 7.0), random.uniform(0.45, 0.8),
+                      random.uniform(-3.0, 3.0), random.uniform(2.5, 4.5),
+                      x, y, random.uniform(2.5, 4.0),
+                      r0=random.uniform(110.0, 160.0))
+
+    def _add(self, t, ang, spd, size, life, spin, tw, x, y, drift, r0=0.0):
         # asymptotic travel ≈ spd*0.31 over a star's life; clamp 500 → ≤155px
         # so every star FADES before the 160px half-window edge — the blast
         # lives in open space, not a box. Normal-burst ring max is 450 (kept)
         # so a supernova (raw spd ~1000, clamped 500) still outruns a click.
+        # r0: starting radius — implode stars start FAR (r0>0) and a
+        # NEGATIVE spd walks them back inward (collapse, not explosion).
         self._s.append((t, ang, min(spd, 500.0), size, life, spin, tw,
-                        (x, y), drift))
+                        (x, y), drift, r0))
 
     def live(self, t, org=(0.0, 0.0), half=160.0):
         """[(x, y, size, rot, alpha)] in field coords (canvas px, centre-
@@ -240,26 +288,36 @@ class Stars:
         ox, oy = org[0] + half, org[1] + half      # canvas centre on screen
         out = []
         keep = []
-        for (t0, ang, spd, size, life, spin, tw, r0, drift) in self._s:
+        for st in self._s:
+            t0, ang, spd, size, life, spin, tw, r0, drift = st[:9]
+            start_r = st[9] if len(st) > 9 else 0.0
             age = t - t0
             if 0 <= age <= life:
-                r = spd * self.TAU0 * (1.0 - math.exp(-age / self.TAU0))
+                # start_r: implode stars are born on a far ring and a
+                # negative spd walks them home (collapse); everything else
+                # starts at the origin (start_r=0, unchanged)
+                r = max(0.0, start_r + spd * self.TAU0
+                        * (1.0 - math.exp(-age / self.TAU0)))
                 u = age / life
                 tw_k = 0.5 * math.sin(age * tw * math.tau)
+                # tail-star cap (cycle-9): peak alpha 0.75 < 0.8 — the
+                # travel tail reads soft; nova FLASH carries the punch
                 a = (1.0 - u * u) * (0.45 + 0.25 * tw_k
-                     + 0.30 * math.sin(t * 2.6 + ang * 3.0))
+                     + 0.30 * math.sin(t * 2.6 + ang * 3.0)) * 0.75
                 # Steinrücken twinkle: SIZE pulses with brightness (never
                 # vanishes flat) — same phase, 50-150%
                 size_k = size * (1.0 + 0.5 * tw_k) * (1.0 - 0.4 * u)
                 # Köppen log-spiral arms (b≈1.2, Milky-Way model): outer
                 # stars lag by b*ln(1+r/40) so ANY burst shears into galaxy
-                # arms; differential-omega term keeps inner orbit faster
-                ang2 = (ang + drift * age * (1.0 - 0.45 * min(r / 90.0, 1.0))
-                        + 1.2 * math.log1p(r / 40.0))
+                # arms; differential-omega term keeps inner orbit faster.
+                # abs(r): implode stars have negative radius — the arms
+                # shear the same, the negative r mirrors them across origin
+                ang2 = (ang + drift * age * (1.0 - 0.45 * min(abs(r) / 90.0, 1.0))
+                        + 1.2 * math.log1p(abs(r) / 40.0))
                 out.append((r0[0] + r * math.cos(ang2) - ox,
                             r0[1] + r * math.sin(ang2) - oy,
                             size_k, spin * age, max(0.0, a)))
-                keep.append((t0, ang, spd, size, life, spin, tw, r0, drift))
+                keep.append(st)
         self._s = keep
         return out
 
@@ -314,7 +372,8 @@ class Aura:
         self.ny = self.gy * 0.028
 
     def render(self, t, speed, energy, ripples, out, core=False,
-               hot=(0.0, 0.0), vel=(0.0, 0.0), trail=(0.0, 0.0), stars=()):
+               hot=(0.0, 0.0), vel=(0.0, 0.0), trail=(0.0, 0.0), stars=(),
+               void=0.0, big=False):
         """Fill ARGB32 numpy `out` (F x F view) with the current aura frame.
         hot = pointer offset from canvas centre in canvas px (non-zero at
         screen edges where the layer window clamps). Ripples carry
@@ -347,20 +406,25 @@ class Aura:
         for (x, y, age, s, exp) in ripples:
             if 0.0 <= age < RIPPLE_LIFE:
                 uu = age / RIPPLE_LIFE
-                # endpoint R0*4.2 = 143px < half-window (160): rings fade out
-                # on their own INSIDE the field — no edge pin, no hidden box.
-                # exp<1 = Sedov-Taylor blast, exp=1 = linear click ring
-                rr = self.R0 * 4.2 * (uu ** exp)
+                # endpoint R0*4.2 (x BIG_K=3 for the galaxy blast) — the
+                # wave outruns the window and cairo keeps painting the arc
+                # on the DESKTOP (see arc pass): no hidden box, the blast
+                # crosses the WHOLE screen. exp<1 = Sedov-Taylor, 1 = linear
+                rr = self.R0 * 4.2 * (BIG_K if big else 1.0) * (uu ** exp)
                 # Sedov pressure decay behind the front: amp ∝ t^-1.2 flash
                 # × (1-u) life-fade (omni cycle-7, unclamped — the [0,1]
                 # clamp flattens it back to linear). Breakout punches, the
                 # remnant evaporates; top-clamped at 2.2 = nova flash scale.
                 amp = min((0.3 / max(uu, 0.05)) ** 1.2 * (1.0 - uu), 2.2) \
                     if exp < 1.0 else (1.0 - uu)
-                band = np.exp(-(((np.hypot(self.gx - x * self.SCALE,
-                                           self.gy - y * self.SCALE) - rr)
-                                 / (self.R0 * 0.18)) ** 2))
+                d_ = np.hypot(self.gx - x * self.SCALE,
+                              self.gy - y * self.SCALE)
+                band = np.exp(-(((d_ - rr) / (self.R0 * 0.18)) ** 2))
                 glow += band * amp * s * 0.8
+                if big:
+                    # shock-heated interior: the galaxy blast floods the
+                    # space the wavefront has already crossed
+                    glow += (d_ < rr) * amp * s * 0.8
         # alive ring hugging the pointer (breathes, tightens when moving)
         pulse = 0.9 + 0.10 * math.sin(t * 2.6) + 0.06 * math.sin(t * 5.1)
         ringR = self.R0 * 0.20 * (1.0 - 0.25 * speed) * pulse
@@ -401,6 +465,18 @@ class Aura:
         if stars:
             stamp(self.gx, self.gy, glow, stars, self.SCALE)
         a = np.clip(glow * self.ascale, 0.0, 1.0 if core else MAX_ALPHA)
+        if void > 0.0:
+            # black hole: an opaque event-horizon disk EATS everything,
+            # stars included (premultiplied over-composite against black).
+            # Held to the POINTER frame — the disk stays under the cursor
+            # even when the window clamps at a screen edge.
+            pr = np.hypot(rx, ry)
+            vd = void * np.clip((self.R0 * 1.35 - pr) / (self.R0 * 0.54),
+                                0.0, 1.0)
+            a = vd + a * (1.0 - vd)
+            void_k = 1.0 - vd
+        else:
+            void_k = 1.0
         tint = np.clip(wob * 0.6 + speed * 0.55 + energy * 0.35, 0.0, 1.0)[..., None]
         cool_, warm_ = self.tints or ((0.42, 0.62, 1.00), (1.00, 0.72, 0.38))
         cool = np.array(cool_, np.float32)
@@ -410,18 +486,22 @@ class Aura:
             rgb = rgb + (1.0 - rgb) * np.clip(core_w * 3.0, 0.0, 1.0)[..., None]
         alpha_u8 = (a * 255).astype(np.uint8)
         # premultiplied -> ARGB32 native uint32 (A<<24 | R<<16 | G<<8 | B)
+        # void eats the colour as well (composited over black): rgb is
+        # weighted by the glow's own surviving alpha, alpha keeps the disk
+        pa = a * void_k
         argb = ((alpha_u8.astype(np.uint32) << 24)
-                | ((rgb[..., 0] * a * 255).astype(np.uint8).astype(np.uint32) << 16)
-                | ((rgb[..., 1] * a * 255).astype(np.uint8).astype(np.uint32) << 8)
-                | (rgb[..., 2] * a * 255).astype(np.uint8).astype(np.uint32))
+                | ((rgb[..., 0] * pa * 255).astype(np.uint8).astype(np.uint32) << 16)
+                | ((rgb[..., 1] * pa * 255).astype(np.uint8).astype(np.uint32) << 8)
+                | (rgb[..., 2] * pa * 255).astype(np.uint8).astype(np.uint32))
         out[...] = argb
 
 
 # ------------------------------------------------------------------ helpers
-def field_only(canvas, radius, t, speed, energy, seed=0.0, grow=1.6):
+def field_only(canvas, radius, t, speed, energy, seed=0.0, grow=1.6,
+               void=0.0, big=False, stars=()):
     a = Aura(canvas, radius, 1.0, seed, grow=grow)
     buf = np.zeros((a.F, a.F), np.uint32)
-    a.render(t, speed, energy, [], buf)
+    a.render(t, speed, energy, [], buf, void=void, big=big, stars=stars)
     return buf
 
 
@@ -493,6 +573,51 @@ def main():
     area = Gtk.DrawingArea()
     area.set_size_request(C, C)
     win.add(area)
+
+    # ---- fullscreen blast layer: the galaxy shockwave must NOT live in a
+    # hidden box — the 320px soul window can't hold a 1000px+ wave. This
+    # transparent full-monitor layer sits idle (hidden, zero cost) and only
+    # shows during a blast; cairo strokes the ring at true screen scale,
+    # so it crosses the WHOLE space and fades at the edges of the desk.
+    bwin = Gtk.Window(type=Gtk.WindowType.POPUP)
+    GtkLayerShell.init_for_window(bwin)
+    GtkLayerShell.set_layer(bwin, GtkLayerShell.Layer.OVERLAY)
+    GtkLayerShell.set_anchor(bwin, GtkLayerShell.Edge.LEFT, True)
+    GtkLayerShell.set_anchor(bwin, GtkLayerShell.Edge.TOP, True)
+    GtkLayerShell.set_anchor(bwin, GtkLayerShell.Edge.RIGHT, True)
+    GtkLayerShell.set_anchor(bwin, GtkLayerShell.Edge.BOTTOM, True)
+    GtkLayerShell.set_exclusive_zone(bwin, -1)
+    GtkLayerShell.set_keyboard_mode(bwin, GtkLayerShell.KeyboardMode.NONE)
+    bwin.set_app_paintable(True)
+    bwin.set_decorated(False)
+    bwin.connect("realize", _pt)
+    bwin.connect("map", _pt)
+    blast_q = __import__("collections").deque()   # (t0, sx, sy, s, exp, big)
+
+    def on_bdraw(_w, cr):
+        # absolute monotonic clock — blast_q entries carry raw tick times
+        tn = time.monotonic()
+        cool_, warm_ = aura.tints or ((0.42, 0.62, 1.00), (1.00, 0.72, 0.38))
+        for (t0, sx, sy, s, exp, big) in blast_q:
+            age = tn - t0
+            if not (0.0 <= age < RIPPLE_LIFE):
+                continue
+            uu = age / RIPPLE_LIFE
+            rr = aura.R0 * 4.2 * (BIG_K if big else 1.0) * (uu ** exp)
+            amp = min((0.3 / max(uu, 0.05)) ** 1.2 * (1.0 - uu), 2.2) \
+                if exp < 1.0 else (1.0 - uu)
+            a = min(amp * s * 0.55, MAX_ALPHA)
+            if a < 0.02:
+                continue
+            cr.set_line_width(max(aura.R0 * 0.16, 2.0))
+            cr.set_source_rgba(warm_[0], warm_[1], warm_[2], a)
+            cr.arc(sx, sy, rr, 0.0, math.tau)
+            cr.stroke()
+        return False
+    barea = Gtk.DrawingArea()
+    bwin.add(barea)
+    barea.connect("draw", on_bdraw)
+    # never show_all: it is mapped only during a blast (tick does that)
 
     surf_box = [None]
 
@@ -586,6 +711,10 @@ def main():
     nova_at = [-9.0]               # monotonic time of last supernova
     still_since = [0.0]            # when the pointer went still
     fire_at = [random.uniform(9.0, 15.0)]   # idle detonation window
+    collapse_at = [fire_at[0] - 5.0]        # void starts gathering 5s before
+    blast_at = [0.0]               # last galaxy-blast time (fast flight)
+    phase = ["rest"]               # soul_phase() this tick: rest/gather/nova/blast
+    void = [0.0]                   # black-hole event-horizon opacity 0..1
     echo = [(0.0, 0.0, 0.0)]       # (due, sx, sy) 2nd shockwave; due<=0 = off
     nova_pt = [None]               # (now, x, y) of shockwave ring to place once hot is known
     vel = [(0.0, 0.0)]                # smoothed per-frame pointer delta
@@ -677,19 +806,39 @@ def main():
             va = 0.35 if math.hypot(*vel[0]) > math.hypot(dx, dy) else 0.18
             vel[0] = (vel[0][0] + (dx - vel[0][0]) * va,
                       vel[0][1] + (dy - vel[0][1]) * va)
-        # IDLE SUPERNOVA: parked long enough, the soul detonates on its own —
-        # one BIG blast + an echo shockwave 0.25s later. This is now the
-        # ONLY supernova: light exists only inside this long-stay event.
-        if speed[0] > 0.02:
+        # THE LIFE CYCLE (soul_phase): parked pointer -> the void gathers
+        # (black hole: opaque disk, particles spiral IN), at the 9-15s
+        # window it implodes and detonates into the nova blast; sustained
+        # fast flight detonates the biggest galaxy blast instead. Moving
+        # gently in between = just a soft tail of small stars.
+        moving = speed[0] > 0.02
+        if moving:
             still_since[0] = now
-        hit, fire_at[0] = idle_nova_due(now, still_since[0], nova_at[0],
-                                        fire_at[0], speed[0] > 0.02)
-        if hit:
+        ph, fire_at[0], collapse_at[0], blast_at[0] = soul_phase(
+            now, still_since[0], nova_at[0], fire_at[0], collapse_at[0],
+            moving, fast=speed[0] > 0.85, blast_at=blast_at[0])
+        # black-hole opacity: fades IN across the gather window, snaps to 0
+        # the instant the blast fires (that snap IS the detonation cue)
+        if ph == "gather":
+            gp = (now - collapse_at[0]) / max(fire_at[0] - collapse_at[0], 0.01)
+            void[0] = min(max(gp, 0.0), 1.0)
+            stars.implode(now - start, float(x), float(y))
+        else:
+            void[0] = 0.0
+        if ph == "nova" or (ph == "blast" and phase[0] != "blast"):
             nova_at[0] = now
             energy[0] = 2.4
+            big = ph == "blast"
             stars.supernova(now - start, float(x), float(y), big=True)
+            if big:
+                stars.supernova(now - start, float(x), float(y), big=True)
+                stars.supernova(now - start, float(x), float(y), big=True)
             nova_pt[0] = (now, float(x), float(y))    # 1st ring via hot conv
-            echo[0] = (now + 0.25, float(x), float(y)) # 2nd ring, same place
+            echo[0] = (now + 0.25, float(x), float(y))  # 2nd ring, same place
+        # travel tail: while flying, small stars shed softly off the wake
+        if moving and speed[0] > 0.12 and phase[0] != "blast":
+            stars.shed(now - start, float(x), float(y), size=0.6)
+        phase[0] = ph
         last[0] = (x, y)
         if trail[0] is None:
             trail[0] = (float(x), float(y))
@@ -728,11 +877,23 @@ def main():
             nova_pt[0] = None
             ripples.append(((nx_ - ml - C / 2.0) / Aura.SCALE,
                             (ny_ - mt - C / 2.0) / Aura.SCALE, nnow, 2.4, 0.4))
+            blast_q.append((nnow, nx_, ny_, 2.4, 0.4, phase[0] == "blast"))
         if echo[0][0] > 0.0 and now >= echo[0][0]:    # idle-nova 2nd ring
             (enow, ex_, ey_) = echo[0]
             echo[0] = (0.0, 0.0, 0.0)
             ripples.append(((ex_ - ml - C / 2.0) / Aura.SCALE,
                             (ey_ - mt - C / 2.0) / Aura.SCALE, enow, 1.7, 0.4))
+            blast_q.append((enow, ex_, ey_, 1.7, 0.4, False))
+        # fullscreen pass: keep the layer mapped only while a wave is alive
+        while blast_q and now - blast_q[0][0] >= RIPPLE_LIFE:
+            blast_q.popleft()
+        if blast_q:
+            if not bwin.get_visible():
+                bwin.set_size_request(screen[0], screen[1])
+                bwin.show()
+            barea.queue_draw()
+        elif bwin.get_visible():
+            bwin.hide()
         del ripples[:-8]
         GtkLayerShell.set_margin(win, GtkLayerShell.Edge.LEFT, ml)
         GtkLayerShell.set_margin(win, GtkLayerShell.Edge.TOP, mt)
@@ -752,7 +913,8 @@ def main():
         # idle budget: pointer still + nothing decaying -> 30fps is plenty
         # (the 2.6rad/s breath samples fine at half rate; 2x less CPU)
         moved = last[1] != (x, y) or hot != last[2]
-        active = moved or speed[0] > 0.01 or energy[0] > 0.02 or live or slive
+        active = (moved or speed[0] > 0.01 or energy[0] > 0.02 or live
+                  or slive or void[0] > 0.0 or bool(blast_q))
         if not active and now - last[3] < 1.0 / 30.0:
             return True
         last[3] = now
@@ -767,7 +929,8 @@ def main():
         aura.strength = float(ac.get("strength", args.strength)) * (1.0 + 0.35 * mid)
         aura.render(now - start, speed[0], energy[0], live, buf,
                     core=bool(ac.get("hide_arrow")), hot=hot, vel=vel[0],
-                    trail=trail_hot, stars=slive)
+                    trail=trail_hot, stars=slive,
+                    void=void[0], big=phase[0] == "blast")
         surf_box[0] = cairo.ImageSurface.create_for_data(
             buf.view(np.uint8), cairo.FORMAT_ARGB32, F, F)
         area.queue_draw()

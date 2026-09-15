@@ -37,6 +37,19 @@ RIPPLE_LIFE = 0.85
 MAX_ALPHA = 0.72   # veil never fully hides the surface under it (non-core)
 
 
+def idle_nova_due(now, still_since, last_nova, fire_at, moving):
+    """Pure state machine: parked pointer detonates one supernova per still
+    period (window 9-15s after going still); any movement re-arms the
+    window. Returns (hit, fire_at) — caller stamps nova_at/energy/stars."""
+    if moving:
+        return False, now + random.uniform(9.0, 15.0)
+    if now - last_nova < 2.0:               # global nova cooldown
+        return False, fire_at
+    if now >= fire_at:
+        return True, now + random.uniform(9.0, 15.0)
+    return False, fire_at
+
+
 def set_cursor_theme(theme, size):
     subprocess.run(["hyprctl", "dispatch", "setcursor", str(theme), str(size)],
                    capture_output=True, timeout=5)
@@ -199,12 +212,16 @@ class Stars:
         if len(self._s) > self.cap:
             self._s = self._s[-self.cap:]
 
-    def supernova(self, t, x, y):
-        """Fast-sweep-then-stop blast: over-driven click burst at 1.6x
-        speed/size + a white-hot energy spike + shockwave ring (caller
-        adds the ripple with scale >1). Cooldown lives in the caller."""
-        self.burst(t, x, y, n_ring=18, n_hero=3, n_micro=8, size=1.5,
-                   speed=1.6)
+    def supernova(self, t, x, y, big=False):
+        """Fast-sweep-then-stop blast, or the big idle detonation (parked
+        pointer): over-driven click burst + shockwave (caller adds the
+        ripple; the idle path adds a 2nd echo ring at +0.25s)."""
+        if big:
+            self.burst(t, x, y, n_ring=24, n_hero=4, n_micro=12,
+                       size=1.8, speed=1.7)
+        else:
+            self.burst(t, x, y, n_ring=18, n_hero=3, n_micro=8, size=1.5,
+                       speed=1.6)
 
     def _add(self, t, ang, spd, size, life, spin, tw, x, y, drift):
         # asymptotic travel ≈ spd*0.31 over a star's life; clamp 500 → ≤155px
@@ -562,6 +579,9 @@ def main():
     energy = [0.0]
     peak = [0.0]                   # max speed since last blast (supernova arm)
     nova_at = [-9.0]               # monotonic time of last supernova
+    still_since = [0.0]            # when the pointer went still
+    fire_at = [random.uniform(9.0, 15.0)]   # idle detonation window
+    echo = [(0.0, 0.0, 0.0)]       # (due, sx, sy) 2nd shockwave; due<=0 = off
     nova_pt = [None]               # (now, x, y) of shockwave ring to place once hot is known
     vel = [(0.0, 0.0)]                # smoothed per-frame pointer delta
     ripples = []                     # canvas-local (x-off, y-off, t0, s)
@@ -667,6 +687,19 @@ def main():
                 energy[0] = 2.2                  # white-hot flash (clip handles it)
                 stars.supernova(now - start, float(x), float(y))
                 nova_pt[0] = (now, x, y)         # shockwave ring once hot is known
+        # IDLE SUPERNOVA: parked long enough, the soul detonates on its own —
+        # one BIG blast + an echo shockwave 0.25s later. Fast-sweep nova above
+        # shares the nova_at cooldown via idle_nova_due's last_nova check.
+        if speed[0] > 0.02:
+            still_since[0] = now
+        hit, fire_at[0] = idle_nova_due(now, still_since[0], nova_at[0],
+                                        fire_at[0], speed[0] > 0.02)
+        if hit:
+            nova_at[0] = now
+            energy[0] = 2.4
+            stars.supernova(now - start, float(x), float(y), big=True)
+            nova_pt[0] = (now, float(x), float(y))    # 1st ring via hot conv
+            echo[0] = (now + 0.25, float(x), float(y)) # 2nd ring, same place
         last[0] = (x, y)
         if trail[0] is None:
             trail[0] = (float(x), float(y))
@@ -705,6 +738,11 @@ def main():
             nova_pt[0] = None
             ripples.append(((nx_ - ml - C / 2.0) / Aura.SCALE,
                             (ny_ - mt - C / 2.0) / Aura.SCALE, nnow, 2.4, 0.4))
+        if echo[0][0] > 0.0 and now >= echo[0][0]:    # idle-nova 2nd ring
+            (enow, ex_, ey_) = echo[0]
+            echo[0] = (0.0, 0.0, 0.0)
+            ripples.append(((ex_ - ml - C / 2.0) / Aura.SCALE,
+                            (ey_ - mt - C / 2.0) / Aura.SCALE, enow, 1.7, 0.4))
         GtkLayerShell.set_margin(win, GtkLayerShell.Edge.LEFT, ml)
         GtkLayerShell.set_margin(win, GtkLayerShell.Edge.TOP, mt)
         poll_clicks(now)
